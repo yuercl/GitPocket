@@ -35,6 +35,11 @@ type DiffRow = {
   rightText: string;
 };
 
+type DiffGroup = {
+  label: string;
+  items: FileDiff[];
+};
+
 const sectionOrder: ProjectStatusSection[] = ["conflicted", "staged", "unstaged", "untracked"];
 const tabItems = ["status", "diff", "commits", "branches"] as const;
 
@@ -144,6 +149,29 @@ function countBySection(status: ProjectStatus | null, section: ProjectStatusSect
   return status?.entries.filter((entry) => entry.section === section).length ?? 0;
 }
 
+function getDiffGroupLabel(path: string) {
+  const parts = path.split("/").filter(Boolean);
+  return parts.length <= 1 ? "root" : parts.slice(0, -1).join("/");
+}
+
+function groupDiffsByDirectory(diffs: FileDiff[]): DiffGroup[] {
+  const groups = new Map<string, FileDiff[]>();
+
+  for (const diff of diffs) {
+    const label = getDiffGroupLabel(diff.path);
+    const items = groups.get(label) ?? [];
+    items.push(diff);
+    groups.set(label, items);
+  }
+
+  return Array.from(groups.entries())
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([label, items]) => ({
+      label,
+      items: items.sort((a, b) => a.path.localeCompare(b.path))
+    }));
+}
+
 function EmptyPanel({ title, body }: { title: string; body: string }) {
   return (
     <div className="rounded-3xl border border-dashed border-white/10 bg-black/20 px-4 py-8 text-center">
@@ -213,6 +241,150 @@ function DiffSplit({ rows }: { rows: DiffRow[] }) {
         </tbody>
       </table>
     </div>
+  );
+}
+
+function DiffFileList({
+  diffs,
+  selectedPath,
+  onSelect,
+  heightClass = "max-h-[32vh]",
+  dense = false,
+  grouped = false
+}: {
+  diffs: FileDiff[];
+  selectedPath: string | null;
+  onSelect: (path: string) => void;
+  heightClass?: string;
+  dense?: boolean;
+  grouped?: boolean;
+}) {
+  const groups = grouped ? groupDiffsByDirectory(diffs) : null;
+
+  return (
+    <div className="rounded-2xl border border-white/10 bg-black/20 p-2">
+      <div className="mb-2 flex items-center justify-between px-2 py-1">
+        <div>
+          <p className="text-xs uppercase tracking-[0.16em] text-slate-500">Changed Files</p>
+          <p className="mt-1 text-[11px] text-slate-400">{diffs.length} files with patch output</p>
+        </div>
+      </div>
+      <div className={clsx(heightClass, "space-y-2 overflow-y-auto pr-1")}>
+        {groups
+          ? groups.map((group) => (
+              <section key={group.label} className="space-y-2">
+                <div className="px-2 pt-2">
+                  <p className="text-[11px] uppercase tracking-[0.18em] text-slate-500">{group.label}</p>
+                </div>
+                {group.items.map((diff) => (
+                  <button
+                    key={diff.path}
+                    type="button"
+                    onClick={() => onSelect(diff.path)}
+                    className={clsx(
+                      "w-full rounded-xl border text-left transition",
+                      dense ? "px-3 py-2.5" : "px-3 py-3",
+                      diff.path === selectedPath ? "border-cyan-400/40 bg-cyan-400/10" : "border-white/10 bg-white/5"
+                    )}
+                  >
+                    <div className="flex items-center justify-between gap-3">
+                      <p className="min-w-0 truncate text-sm text-white">{diff.path.split("/").at(-1) ?? diff.path}</p>
+                      <p className="shrink-0 text-[11px] text-slate-400">
+                        <span className="text-lime-300">+{diff.additions}</span>
+                        {" "}
+                        <span className="text-rose-300">-{diff.deletions}</span>
+                      </p>
+                    </div>
+                  </button>
+                ))}
+              </section>
+            ))
+          : diffs.map((diff) => (
+              <button
+                key={diff.path}
+                type="button"
+                onClick={() => onSelect(diff.path)}
+                className={clsx(
+                  "w-full rounded-xl border text-left transition",
+                  dense ? "px-3 py-2.5" : "px-3 py-3",
+                  diff.path === selectedPath ? "border-cyan-400/40 bg-cyan-400/10" : "border-white/10 bg-white/5"
+                )}
+              >
+                <div className="flex items-center justify-between gap-3">
+                  <p className="min-w-0 truncate text-sm text-white">{diff.path}</p>
+                  <p className="shrink-0 text-[11px] text-slate-400">
+                    <span className="text-lime-300">+{diff.additions}</span>
+                    {" "}
+                    <span className="text-rose-300">-{diff.deletions}</span>
+                  </p>
+                </div>
+              </button>
+            ))}
+      </div>
+    </div>
+  );
+}
+
+function DiffCanvas({
+  diff,
+  diffMode,
+  onBack,
+  onPrevious,
+  onNext,
+  className
+}: {
+  diff: FileDiff;
+  diffMode: DiffMode;
+  onBack?: () => void;
+  onPrevious?: () => void;
+  onNext?: () => void;
+  className?: string;
+}) {
+  return (
+    <article className={clsx("overflow-hidden rounded-2xl border border-white/10 bg-black/25", className)}>
+      <div className="flex items-center justify-between gap-3 border-b border-white/10 bg-black/40 px-3 py-3 backdrop-blur">
+        <div className="min-w-0">
+          <p className="truncate text-sm text-white">{diff.path}</p>
+          <p className="mt-1 text-xs text-slate-400">
+            <span className="text-lime-300">+{diff.additions}</span> / <span className="text-rose-300">-{diff.deletions}</span>
+          </p>
+        </div>
+        <div className="flex items-center gap-2">
+          {onPrevious && (
+            <button type="button" onClick={onPrevious} className="rounded-xl border border-white/10 px-3 py-2 text-xs text-slate-200">
+              Prev
+            </button>
+          )}
+          {onNext && (
+            <button type="button" onClick={onNext} className="rounded-xl border border-white/10 px-3 py-2 text-xs text-slate-200">
+              Next
+            </button>
+          )}
+          {diff.tooLarge && <span className="shrink-0 rounded-full bg-amber-400/15 px-2 py-1 text-[11px] text-amber-200">large file</span>}
+          {onBack && (
+            <button type="button" onClick={onBack} className="rounded-xl border border-white/10 px-3 py-2 text-xs text-slate-200">
+              Back
+            </button>
+          )}
+        </div>
+      </div>
+      <div className="max-h-full overflow-auto">
+        {diff.tooLarge ? (
+          <div className="px-3 py-4 font-mono text-[11px] leading-5 text-slate-400">Patch hidden for files larger than 2MB.</div>
+        ) : diffMode === "split" ? (
+          <>
+            <div className="xl:hidden">
+              <DiffInline rows={parsePatch(diff.patch)} />
+            </div>
+            <div className="hidden xl:block">
+              <DiffSplit rows={parsePatch(diff.patch)} />
+            </div>
+          </>
+        ) : (
+          <DiffInline rows={parsePatch(diff.patch)} />
+        )}
+      </div>
+    </article>
   );
 }
 
@@ -568,7 +740,7 @@ export function App() {
 
   return (
     <div className="min-h-screen bg-[radial-gradient(circle_at_top_left,_rgba(125,211,252,0.16),_transparent_26%),radial-gradient(circle_at_top_right,_rgba(190,242,100,0.08),_transparent_22%),linear-gradient(180deg,_#0b1020_0%,_#050816_58%,_#03050d_100%)] text-slate-100">
-      <div className={clsx("mx-auto min-h-screen py-4 sm:py-6", compactLandscape ? "max-w-none px-2" : "max-w-7xl px-4 sm:px-6 lg:px-8")}>
+      <div className={clsx("mx-auto min-h-screen py-4 sm:py-6", compactLandscape ? "max-w-none px-2" : "max-w-[1800px] px-4 sm:px-6 lg:px-8")}>
         <header className={clsx("mb-4 flex items-end justify-between gap-4", mobile && "sticky top-0 z-20 rounded-3xl border border-white/10 bg-black/35 px-3 py-3 backdrop-blur")}>
           <div className="min-w-0">
             <div className="inline-flex rounded-full border border-white/10 bg-white/5 px-3 py-1 text-[11px] uppercase tracking-[0.24em] text-signal-cyan">
@@ -904,6 +1076,17 @@ function MobileWorkspace({
   loadFileContent: (path: string, ref?: string | null) => Promise<void>;
   openCommitDiff: (file: FileDiff) => void;
 }) {
+  const selectedDiffIndex = selectedDiff ? diffs.findIndex((diff) => diff.path === selectedDiff.path) : -1;
+
+  function selectDiffAt(index: number) {
+    const nextDiff = diffs[index];
+    if (!nextDiff) {
+      return;
+    }
+    setSelectedDiffPath(nextDiff.path);
+    setMobileDiffOpen(true);
+  }
+
   if (!activeProject) {
     return <EmptyPanel title="No active repository" body="Pick a saved project from the workspace menu." />;
   }
@@ -985,7 +1168,7 @@ function MobileWorkspace({
           <div className="flex items-center justify-between gap-3">
             <div>
               <p className="text-sm font-medium text-white">Diff Viewer</p>
-              <p className="text-xs text-slate-400">Single file first on mobile.</p>
+              <p className="text-xs text-slate-400">Single file first on mobile, wider canvas in landscape.</p>
             </div>
             <div className="flex items-center gap-2">
               {previousTab && previousTab !== "diff" && (
@@ -1014,84 +1197,30 @@ function MobileWorkspace({
           {selectedDiff ? (
             <>
               <div className={clsx("gap-3", compactLandscape ? "grid grid-cols-[36%_64%]" : "block")}>
-              {!compactLandscape && (
-                <div className={clsx("rounded-2xl border border-white/10 bg-black/20 p-2", mobileDiffOpen && "hidden")}>
-                  <div className="mb-2 px-2 py-1 text-xs uppercase tracking-[0.16em] text-slate-500">Changed Files</div>
-                  <div className="max-h-[32vh] space-y-2 overflow-y-auto">
-                    {diffs.map((diff) => (
-                      <button
-                        key={diff.path}
-                        type="button"
-                        onClick={() => {
-                          setSelectedDiffPath(diff.path);
-                          setMobileDiffOpen(true);
-                        }}
-                        className={clsx("w-full rounded-xl border px-3 py-3 text-left transition", diff.path === selectedDiff.path ? "border-cyan-400/40 bg-cyan-400/10" : "border-white/10 bg-white/5")}
-                      >
-                        <p className="truncate text-sm text-white">{diff.path}</p>
-                        <p className="mt-1 text-xs text-slate-400">
-                          <span className="text-lime-300">+{diff.additions}</span> / <span className="text-rose-300">-{diff.deletions}</span>
-                        </p>
-                      </button>
-                    ))}
+                {!compactLandscape && (
+                  <div className={clsx(mobileDiffOpen && "hidden")}>
+                    <DiffFileList
+                      diffs={diffs}
+                      selectedPath={selectedDiff.path}
+                      onSelect={(path) => {
+                        setSelectedDiffPath(path);
+                        setMobileDiffOpen(true);
+                      }}
+                    />
                   </div>
-                </div>
-              )}
-              {compactLandscape && (
-                <div className="rounded-2xl border border-white/10 bg-black/20 p-2">
-                  <div className="mb-2 px-2 py-1 text-xs uppercase tracking-[0.16em] text-slate-500">Changed Files</div>
-                  <div className="max-h-[55vh] space-y-2 overflow-y-auto">
-                    {diffs.map((diff) => (
-                      <button
-                        key={diff.path}
-                        type="button"
-                        onClick={() => setSelectedDiffPath(diff.path)}
-                        className={clsx("w-full rounded-xl border px-3 py-3 text-left transition", diff.path === selectedDiff.path ? "border-cyan-400/40 bg-cyan-400/10" : "border-white/10 bg-white/5")}
-                      >
-                        <p className="truncate text-sm text-white">{diff.path}</p>
-                        <p className="mt-1 text-xs text-slate-400">
-                          <span className="text-lime-300">+{diff.additions}</span> / <span className="text-rose-300">-{diff.deletions}</span>
-                        </p>
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              )}
+                )}
+                {compactLandscape && (
+                  <DiffFileList diffs={diffs} selectedPath={selectedDiff.path} onSelect={setSelectedDiffPath} heightClass="max-h-[55vh]" dense />
+                )}
 
-              <article className={clsx("overflow-hidden rounded-2xl border border-white/10 bg-black/25", compactPortrait && !mobileDiffOpen && "hidden", compactLandscape && "min-h-[60vh]")}>
-                <div className="flex items-center justify-between border-b border-white/10 bg-black/40 px-3 py-3 backdrop-blur">
-                  <div className="min-w-0">
-                    <p className="truncate text-sm text-white">{selectedDiff.path}</p>
-                    <p className="mt-1 text-xs text-slate-400">
-                      <span className="text-lime-300">+{selectedDiff.additions}</span> / <span className="text-rose-300">-{selectedDiff.deletions}</span>
-                    </p>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    {selectedDiff.tooLarge && <span className="shrink-0 rounded-full bg-amber-400/15 px-2 py-1 text-[11px] text-amber-200">large file</span>}
-                    {compactPortrait && (
-                      <button type="button" onClick={() => setMobileDiffOpen(false)} className="rounded-xl border border-white/10 px-3 py-2 text-xs text-slate-200">
-                        Back
-                      </button>
-                    )}
-                  </div>
-                </div>
-                <div className={clsx(compactLandscape && "max-h-[55vh] overflow-auto")}>
-                  {selectedDiff.tooLarge ? (
-                    <div className="px-3 py-4 font-mono text-[11px] leading-5 text-slate-400">Patch hidden for files larger than 2MB.</div>
-                  ) : diffMode === "split" ? (
-                    <>
-                      <div className="xl:hidden">
-                        <DiffInline rows={parsePatch(selectedDiff.patch)} />
-                      </div>
-                      <div className="hidden xl:block">
-                        <DiffSplit rows={parsePatch(selectedDiff.patch)} />
-                      </div>
-                    </>
-                  ) : (
-                    <DiffInline rows={parsePatch(selectedDiff.patch)} />
-                  )}
-                </div>
-              </article>
+                <DiffCanvas
+                  diff={selectedDiff}
+                  diffMode={diffMode}
+                  onBack={compactPortrait ? () => setMobileDiffOpen(false) : undefined}
+                  onPrevious={selectedDiffIndex > 0 ? () => selectDiffAt(selectedDiffIndex - 1) : undefined}
+                  onNext={selectedDiffIndex >= 0 && selectedDiffIndex < diffs.length - 1 ? () => selectDiffAt(selectedDiffIndex + 1) : undefined}
+                  className={clsx(compactPortrait && !mobileDiffOpen && "hidden", compactLandscape && "min-h-[60vh]")}
+                />
               </div>
             </>
           ) : (
@@ -1203,5 +1332,232 @@ function MobileWorkspace({
 }
 
 function DesktopWorkspace(props: Parameters<typeof MobileWorkspace>[0]) {
-  return <MobileWorkspace {...props} compactPortrait={false} compactLandscape={false} />;
+  const {
+    activeProject,
+    status,
+    diffs,
+    selectedDiff,
+    setSelectedDiffPath,
+    commits,
+    selectedCommit,
+    selectedCommitHash,
+    commitFiles,
+    selectedCommitFilePath,
+    setSelectedCommitFilePath,
+    setSelectedCommitHash,
+    setViewer,
+    viewer,
+    branches,
+    tab,
+    setTab,
+    diffMode,
+    setDiffMode,
+    panelError,
+    loadingDetails,
+    sections,
+    openWorkingDiff,
+    loadFileContent,
+    openCommitDiff
+  } = props;
+
+  if (!activeProject) {
+    return <EmptyPanel title="No active repository" body="Pick a saved project from the workspace menu." />;
+  }
+
+  return (
+    <main className="rounded-[28px] border border-white/10 bg-white/5 p-4 shadow-panel backdrop-blur">
+      <div className="mb-4 flex items-center justify-between gap-4">
+        <div className="overflow-x-auto rounded-2xl bg-black/20 p-1">
+          <div className="grid min-w-max grid-cols-4 gap-2">
+            {tabItems.map((item) => (
+              <button key={item} type="button" onClick={() => setTab(item)} className={clsx("rounded-xl px-4 py-3 text-sm font-medium capitalize transition", tab === item ? "bg-white text-slate-900" : "text-slate-400")}>
+                {item}
+              </button>
+            ))}
+          </div>
+        </div>
+        <div className="rounded-2xl border border-white/10 bg-black/20 px-4 py-3 text-right">
+          <p className="text-[11px] uppercase tracking-[0.18em] text-slate-500">Active Repo</p>
+          <p className="mt-1 text-sm text-white">{activeProject.name}</p>
+          <p className="mt-1 font-mono text-[11px] text-slate-400">{activeProject.branch}</p>
+        </div>
+      </div>
+
+      {panelError && <div className="mb-4 rounded-2xl border border-rose-400/20 bg-rose-400/10 px-4 py-3 text-sm text-rose-100">{panelError}</div>}
+
+      {loadingDetails ? (
+        <EmptyPanel title="Loading repository details" body="Fetching status, diff, commit log, and branch data." />
+      ) : tab === "status" ? (
+        <div className="grid gap-4 xl:grid-cols-[minmax(0,1.2fr)_minmax(320px,0.8fr)]">
+          <div className="space-y-4">
+            {status?.entries.length ? (
+              sections.map((section) => {
+                const items = status.entries.filter((entry) => entry.section === section);
+                if (!items.length) {
+                  return null;
+                }
+                return (
+                  <section key={section} className="rounded-2xl border border-white/10 bg-black/20 p-4">
+                    <div className="mb-3 flex items-center justify-between">
+                      <h3 className="text-sm font-medium capitalize text-white">{section}</h3>
+                      <span className="rounded-full bg-black/20 px-2.5 py-1 text-[11px] text-slate-400">{items.length}</span>
+                    </div>
+                    <div className="space-y-2">
+                      {items.map((entry: StatusEntry) => {
+                        const diff = diffs.find((item) => item.path === entry.path);
+                        return (
+                          <div key={`${entry.section}-${entry.path}`} className="rounded-2xl border border-white/10 bg-white/5 px-3 py-3">
+                            <div className="flex items-center justify-between gap-3">
+                              <div className="min-w-0">
+                                <div className="flex items-center gap-3">
+                                  <span className="w-8 font-mono text-sm text-signal-lime">{entry.code}</span>
+                                  <p className="truncate text-sm text-white">{entry.path}</p>
+                                </div>
+                                <p className="mt-1 text-xs uppercase tracking-[0.12em] text-slate-500">{entry.section}</p>
+                              </div>
+                              <div className="flex shrink-0 gap-2">
+                                {diff && (
+                                  <button type="button" onClick={() => openWorkingDiff(entry.path)} className="rounded-full border border-white/10 px-2.5 py-1 text-[11px] text-slate-300">
+                                    Diff
+                                  </button>
+                                )}
+                                <button type="button" onClick={() => void loadFileContent(entry.path)} className="rounded-full border border-white/10 px-2.5 py-1 text-[11px] text-slate-300">
+                                  Content
+                                </button>
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </section>
+                );
+              })
+            ) : (
+              <EmptyPanel title="Working tree is clean" body="This repository has no staged, unstaged, untracked, or conflicted files." />
+            )}
+          </div>
+          {viewer && <ViewerPanel viewer={viewer} diffMode={diffMode} />}
+        </div>
+      ) : tab === "diff" ? (
+        selectedDiff ? (
+          <section className="rounded-[24px] border border-white/10 bg-black/20 p-3">
+            <div className="mb-3 flex items-center justify-between gap-4 rounded-2xl border border-white/10 bg-black/30 px-4 py-3">
+              <div>
+                <p className="text-sm font-medium text-white">Diff Explorer</p>
+                <p className="mt-1 text-xs text-slate-400">Pinned file list on the left, wider diff canvas on the right.</p>
+              </div>
+              <div className="grid grid-cols-2 gap-2 rounded-2xl bg-black/20 p-1">
+                {(["inline", "split"] as const).map((mode) => (
+                  <button key={mode} type="button" onClick={() => setDiffMode(mode)} className={clsx("rounded-xl px-4 py-2 text-xs font-medium capitalize", diffMode === mode ? "bg-white text-slate-900" : "text-slate-400")}>
+                    {mode}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div className="grid gap-3 xl:grid-cols-[320px_minmax(0,1fr)]">
+              <DiffFileList diffs={diffs} selectedPath={selectedDiff.path} onSelect={setSelectedDiffPath} heightClass="max-h-[calc(100vh-20rem)]" dense grouped />
+              <DiffCanvas diff={selectedDiff} diffMode={diffMode} className="min-h-[70vh]" />
+            </div>
+          </section>
+        ) : (
+          <EmptyPanel title="No diff output" body="Select a repo with working tree changes to inspect file-by-file patches here." />
+        )
+      ) : tab === "commits" ? (
+        <div className="grid gap-4 xl:grid-cols-[380px_minmax(0,1fr)]">
+          <div className="space-y-2">
+            {commits.map((commit) => (
+              <button
+                key={commit.hash}
+                type="button"
+                onClick={() => {
+                  setSelectedCommitHash(commit.hash);
+                  setViewer(null);
+                }}
+                className={clsx("w-full rounded-2xl border px-3 py-3 text-left transition", selectedCommitHash === commit.hash ? "border-cyan-400/40 bg-cyan-400/10" : "border-white/10 bg-black/20")}
+              >
+                <p className="text-sm text-white">{commit.message}</p>
+                <p className="mt-1 font-mono text-xs text-slate-400">{commit.hash.slice(0, 7)}</p>
+                <p className="mt-2 text-xs text-slate-500">
+                  {commit.author} • {commit.date}
+                </p>
+              </button>
+            ))}
+          </div>
+
+          <div className="space-y-4">
+            {selectedCommit && (
+              <section className="rounded-2xl border border-white/10 bg-black/20 p-4">
+                <div className="mb-3">
+                  <p className="text-sm font-medium text-white">Changed Files</p>
+                  <p className="mt-1 text-xs text-slate-400">{selectedCommit.hash.slice(0, 7)}</p>
+                </div>
+                {commitFiles.length > 0 ? (
+                  <div className="grid gap-2 2xl:grid-cols-2">
+                    {commitFiles.map((file) => (
+                      <div
+                        key={file.path}
+                        className={clsx(
+                          "rounded-xl border px-3 py-3",
+                          selectedCommitFilePath === file.path ? "border-cyan-400/40 bg-cyan-400/10" : "border-white/10 bg-white/5"
+                        )}
+                      >
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="min-w-0">
+                            <p className="truncate text-sm text-white">{file.path}</p>
+                            <p className="mt-1 text-xs text-slate-400">
+                              <span className="text-lime-300">+{file.additions}</span> / <span className="text-rose-300">-{file.deletions}</span>
+                            </p>
+                          </div>
+                          <div className="flex shrink-0 gap-2">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setSelectedCommitFilePath(file.path);
+                                openCommitDiff(file);
+                              }}
+                              className="rounded-full border border-white/10 px-2.5 py-1 text-[11px] text-slate-300"
+                            >
+                              Diff
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setSelectedCommitFilePath(file.path);
+                                void loadFileContent(file.path, selectedCommit.hash);
+                              }}
+                              className="rounded-full border border-white/10 px-2.5 py-1 text-[11px] text-slate-300"
+                            >
+                              Content
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <EmptyPanel title="No files" body="This commit has no changed files available to preview." />
+                )}
+              </section>
+            )}
+            {viewer && <ViewerPanel viewer={viewer} diffMode={diffMode} />}
+          </div>
+        </div>
+      ) : branches.length > 0 ? (
+        <div className="grid gap-3 xl:grid-cols-2 2xl:grid-cols-3">
+          {branches.map((branch) => (
+            <div key={branch.name} className="flex items-center justify-between gap-3 rounded-2xl border border-white/10 bg-black/20 px-4 py-4">
+              <div className="min-w-0">
+                <p className="truncate text-sm text-white">{branch.name}</p>
+                <p className="mt-1 font-mono text-xs text-slate-500">{branch.commit.slice(0, 7)}</p>
+              </div>
+              {branch.current && <span className="shrink-0 rounded-full border border-cyan-400/40 bg-cyan-400/10 px-2 py-1 text-[11px] text-cyan-200">current</span>}
+            </div>
+          ))}
+        </div>
+      ) : (
+        <EmptyPanel title="No branches loaded" body="Branch metadata will appear here for the selected repository." />
+      )}
+    </main>
+  );
 }
