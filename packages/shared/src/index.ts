@@ -37,6 +37,13 @@ export type FileDiff = {
   tooLarge?: boolean;
 };
 
+export type FileContent = {
+  path: string;
+  ref: string | null;
+  content: string;
+  tooLarge?: boolean;
+};
+
 export type CommitRecord = {
   hash: string;
   author: string;

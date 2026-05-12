@@ -4,7 +4,9 @@ import cors from "@fastify/cors";
 import { z } from "zod";
 import {
   getProjectBranches,
+  getCommitFiles,
   getProjectDiff,
+  getFileContent,
   getProjectLog,
   getProjectStatus,
   listDirectory,
@@ -32,6 +34,13 @@ const app = Fastify({
   logger: true
 });
 
+function getDefaultBrowseRoot() {
+  if (allowedRoots.length > 0) {
+    return allowedRoots[0];
+  }
+  return path.parse(process.cwd()).root;
+}
+
 await app.register(cors, {
   origin: true
 });
@@ -43,14 +52,22 @@ app.get("/health", async () => ({
 }));
 
 app.get("/api/fs/roots", async () => ({
-  items: allowedRoots.map((root) => ({
-    name: root.split("/").filter(Boolean).at(-1) ?? root,
-    path: root
-  }))
+  items:
+    allowedRoots.length > 0
+      ? allowedRoots.map((root) => ({
+          name: root.split("/").filter(Boolean).at(-1) ?? root,
+          path: root
+        }))
+      : [
+          {
+            name: "root",
+            path: getDefaultBrowseRoot()
+          }
+        ]
 }));
 
 app.get("/api/fs/list", async (request, reply) => {
-  const pathQuery = (request.query as { path?: string }).path ?? allowedRoots[0];
+  const pathQuery = (request.query as { path?: string }).path ?? getDefaultBrowseRoot();
   try {
     return await listDirectory(pathQuery, policy);
   } catch (error) {
@@ -119,6 +136,48 @@ app.get("/api/projects/:id/branches", async (request, reply) => {
   return {
     items: await getProjectBranches(project.path, policy)
   };
+});
+
+app.get("/api/projects/:id/file", async (request, reply) => {
+  const project = projectStore.getProject((request.params as { id: string }).id);
+  if (!project) {
+    return reply.code(404).send({ error: "Project not found" });
+  }
+
+  const query = request.query as { path?: string; ref?: string };
+  if (!query.path) {
+    return reply.code(400).send({ error: "Missing file path" });
+  }
+
+  try {
+    return await getFileContent(project.path, query.path, policy, query.ref);
+  } catch (error) {
+    return reply.code(400).send({
+      error: error instanceof Error ? error.message : "Failed to load file content"
+    });
+  }
+});
+
+app.get("/api/projects/:id/commit-files", async (request, reply) => {
+  const project = projectStore.getProject((request.params as { id: string }).id);
+  if (!project) {
+    return reply.code(404).send({ error: "Project not found" });
+  }
+
+  const query = request.query as { commit?: string };
+  if (!query.commit) {
+    return reply.code(400).send({ error: "Missing commit hash" });
+  }
+
+  try {
+    return {
+      items: await getCommitFiles(project.path, query.commit, policy)
+    };
+  } catch (error) {
+    return reply.code(400).send({
+      error: error instanceof Error ? error.message : "Failed to load commit files"
+    });
+  }
 });
 
 try {

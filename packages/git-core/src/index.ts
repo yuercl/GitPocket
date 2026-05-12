@@ -5,6 +5,7 @@ import type {
   BranchRecord,
   DirectoryListing,
   CommitRecord,
+  FileContent,
   FileDiff,
   ProjectRecord,
   ProjectStatus,
@@ -12,10 +13,18 @@ import type {
 } from "@gitpocket/shared";
 
 const LARGE_FILE_PATCH_LIMIT = 2 * 1024 * 1024;
+const LARGE_FILE_CONTENT_LIMIT = 512 * 1024;
 
 export type RepoAccessPolicy = {
   allowedRoots: string[];
 };
+
+function getDefaultRoot(policy: RepoAccessPolicy) {
+  if (policy.allowedRoots.length > 0) {
+    return path.resolve(policy.allowedRoots[0]);
+  }
+  return path.parse(process.cwd()).root;
+}
 
 function createGit(repoPath: string) {
   return simpleGit({
@@ -87,7 +96,7 @@ export async function validateRepo(repoPath: string, policy: RepoAccessPolicy) {
 }
 
 export async function listDirectory(targetPath: string, policy: RepoAccessPolicy): Promise<DirectoryListing> {
-  const resolved = ensureInsideAllowedRoots(targetPath, policy);
+  const resolved = ensureInsideAllowedRoots(targetPath || getDefaultRoot(policy), policy);
   const stat = await fs.stat(resolved);
   if (!stat.isDirectory()) {
     throw new Error(`Path ${resolved} is not a directory`);
@@ -122,7 +131,7 @@ export async function listDirectory(targetPath: string, policy: RepoAccessPolicy
         : [
             {
               name: "root",
-              path: path.parse(resolved).root
+              path: getDefaultRoot(policy)
             }
           ],
     entries
@@ -131,27 +140,41 @@ export async function listDirectory(targetPath: string, policy: RepoAccessPolicy
 
 function mapStatusEntries(status: Awaited<ReturnType<ReturnType<typeof createGit>["status"]>>): StatusEntry[] {
   const entries: StatusEntry[] = [];
-  for (const file of status.created) {
-    entries.push({ path: file, code: "A", section: "staged" });
-  }
-  for (const file of status.deleted) {
-    entries.push({ path: file, code: "D", section: "staged" });
-  }
-  for (const file of status.modified) {
-    entries.push({ path: file, code: "M", section: "staged" });
-  }
-  for (const file of status.not_added) {
-    entries.push({ path: file, code: "??", section: "untracked" });
-  }
-  for (const file of status.conflicted) {
-    entries.push({ path: file, code: "UU", section: "conflicted" });
-  }
   for (const file of status.files) {
+    const indexCode = file.index.trim();
+    const workingCode = file.working_dir.trim();
+
+    if (file.index === "?" && file.working_dir === "?") {
+      entries.push({
+        path: file.path,
+        code: "??",
+        section: "untracked"
+      });
+      continue;
+    }
+
+    if (file.index === "U" || file.working_dir === "U" || status.conflicted.includes(file.path)) {
+      entries.push({
+        path: file.path,
+        code: `${indexCode || " "}${workingCode || " "}`.replaceAll(" ", "") || "UU",
+        section: "conflicted"
+      });
+      continue;
+    }
+
+    if (file.index !== " " && file.index !== "?") {
+      entries.push({
+        path: file.path,
+        code: file.index,
+        section: "staged"
+      });
+    }
+
     if (file.working_dir !== " " && file.working_dir !== "?") {
       entries.push({
         path: file.path,
         code: file.working_dir,
-        section: file.working_dir === "U" ? "conflicted" : "unstaged"
+        section: "unstaged"
       });
     }
   }
@@ -248,4 +271,59 @@ export async function getProjectBranches(repoPath: string, policy: RepoAccessPol
     current: branch.current,
     commit: branch.commit
   }));
+}
+
+export async function getFileContent(
+  repoPath: string,
+  filePath: string,
+  policy: RepoAccessPolicy,
+  ref?: string
+): Promise<FileContent> {
+  const resolved = await validateRepo(repoPath, policy);
+  const git = createGit(resolved);
+
+  if (ref) {
+    const content = await git.show([`${ref}:${filePath}`]);
+    const tooLarge = Buffer.byteLength(content, "utf8") > LARGE_FILE_CONTENT_LIMIT;
+    return {
+      path: filePath,
+      ref,
+      content: tooLarge ? "" : content,
+      tooLarge
+    };
+  }
+
+  const absolutePath = path.join(resolved, filePath);
+  const content = await fs.readFile(absolutePath, "utf8");
+  const tooLarge = Buffer.byteLength(content, "utf8") > LARGE_FILE_CONTENT_LIMIT;
+  return {
+    path: filePath,
+    ref: null,
+    content: tooLarge ? "" : content,
+    tooLarge
+  };
+}
+
+export async function getCommitFiles(
+  repoPath: string,
+  commitHash: string,
+  policy: RepoAccessPolicy
+): Promise<FileDiff[]> {
+  const resolved = await validateRepo(repoPath, policy);
+  const git = createGit(resolved);
+  const summary = await git.diffSummary([`${commitHash}^!`]);
+
+  return Promise.all(
+    summary.files.map(async (file) => {
+      const patch = await git.raw(["show", "--format=", commitHash, "--", file.file]);
+      const bytes = Buffer.byteLength(patch, "utf8");
+      return {
+        path: file.file,
+        additions: "insertions" in file ? file.insertions : 0,
+        deletions: "deletions" in file ? file.deletions : 0,
+        patch: bytes > LARGE_FILE_PATCH_LIMIT ? "" : patch,
+        tooLarge: bytes > LARGE_FILE_PATCH_LIMIT
+      };
+    })
+  );
 }
