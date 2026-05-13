@@ -75,7 +75,7 @@ type FileTreeNode = {
 };
 
 const sectionOrder: ProjectStatusSection[] = ["conflicted", "staged", "unstaged", "untracked"];
-const tabItems: AppTab[] = ["status", "files", "diff", "commits", "branches"];
+const tabItems: AppTab[] = ["files", "diff", "commits", "branches"];
 
 async function safeFetch<T>(path: string): Promise<T> {
   const response = await fetch(`${API_BASE}${path}`);
@@ -179,8 +179,8 @@ function parsePatch(patch: string): DiffRow[] {
   return rows;
 }
 
-function countBySection(status: ProjectStatus | null, section: ProjectStatusSection) {
-  return status?.entries.filter((entry) => entry.section === section).length ?? 0;
+function countWorkingChanges(status: ProjectStatus | null) {
+  return status?.entries.length ?? 0;
 }
 
 function getDiffGroupLabel(path: string) {
@@ -302,6 +302,63 @@ function buildFileTree(files: RepoFileEntry[]) {
   return sortNodes(root.children);
 }
 
+function collectDirectoryPaths(nodes: FileTreeNode[]): string[] {
+  return nodes.flatMap((node) => (node.type === "directory" ? [node.path, ...collectDirectoryPaths(node.children)] : []));
+}
+
+function TreeChevron({ open }: { open: boolean }) {
+  return (
+    <svg
+      viewBox="0 0 16 16"
+      aria-hidden="true"
+      className={clsx("h-3.5 w-3.5 transition-transform", open && "rotate-90")}
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <path d="M6 3.5 10.5 8 6 12.5" />
+    </svg>
+  );
+}
+
+function FolderIcon({ open }: { open: boolean }) {
+  return (
+    <svg viewBox="0 0 20 16" aria-hidden="true" className="h-4 w-4 shrink-0" fill="none">
+      <path
+        d="M1.5 4.5A2.5 2.5 0 0 1 4 2h3.1c.5 0 1 .2 1.3.56l1.1 1.24c.19.21.47.34.76.34H16A2.5 2.5 0 0 1 18.5 6.5v5A2.5 2.5 0 0 1 16 14H4A2.5 2.5 0 0 1 1.5 11.5v-7Z"
+        fill={open ? "#dcb14a" : "#b98b2f"}
+        fillOpacity={open ? "0.32" : "0.18"}
+        stroke={open ? "#f0cb73" : "#d8a84a"}
+        strokeWidth="1.2"
+      />
+      <path d="M1.8 5.5h16.4" stroke={open ? "#f7df9f" : "#e6bf69"} strokeWidth="1.1" opacity="0.9" />
+    </svg>
+  );
+}
+
+function FileIcon({ image = false }: { image?: boolean }) {
+  if (image) {
+    return (
+      <svg viewBox="0 0 16 16" aria-hidden="true" className="h-4 w-4 shrink-0" fill="none">
+        <path d="M4 1.5h5l3 3v8A2.5 2.5 0 0 1 9.5 15h-5A2.5 2.5 0 0 1 2 12.5v-8A3 3 0 0 1 4 1.5Z" fill="#0f172a" stroke="#7dd3fc" strokeWidth="1.1" />
+        <path d="M9 1.5v3h3" stroke="#7dd3fc" strokeWidth="1.1" />
+        <circle cx="5.5" cy="7" r="1.1" fill="#7dd3fc" />
+        <path d="m4.5 11 2.1-2.1a.7.7 0 0 1 .96 0l.9.86a.7.7 0 0 0 .96 0l.58-.55c.28-.27.73-.27 1 0L12 11" stroke="#67e8f9" strokeWidth="1.1" strokeLinecap="round" strokeLinejoin="round" />
+      </svg>
+    );
+  }
+
+  return (
+    <svg viewBox="0 0 16 16" aria-hidden="true" className="h-4 w-4 shrink-0" fill="none">
+      <path d="M4 1.5h5l3 3v8A2.5 2.5 0 0 1 9.5 15h-5A2.5 2.5 0 0 1 2 12.5v-8A3 3 0 0 1 4 1.5Z" fill="#111827" stroke="#94a3b8" strokeWidth="1.1" />
+      <path d="M9 1.5v3h3" stroke="#94a3b8" strokeWidth="1.1" />
+      <path d="M4.7 8h4.8M4.7 10.2h5.6" stroke="#cbd5e1" strokeWidth="1" strokeLinecap="round" />
+    </svg>
+  );
+}
+
 function EmptyPanel({ title, body }: { title: string; body: string }) {
   return (
     <div className="rounded-3xl border border-dashed border-white/10 bg-black/20 px-4 py-8 text-center">
@@ -313,7 +370,7 @@ function EmptyPanel({ title, body }: { title: string; body: string }) {
 
 function DiffInline({ rows }: { rows: DiffRow[] }) {
   return (
-    <div className="overflow-x-auto">
+    <div className="overflow-x-auto bg-[#050816]">
       <table className="min-w-full border-collapse font-mono text-[11px] leading-5">
         <tbody>
           {rows.map((row, index) => (
@@ -341,7 +398,7 @@ function DiffInline({ rows }: { rows: DiffRow[] }) {
 
 function DiffSplit({ rows }: { rows: DiffRow[] }) {
   return (
-    <div className="overflow-x-auto">
+    <div className="overflow-x-auto bg-[#050816]">
       <table className="min-w-full border-collapse font-mono text-[11px] leading-5">
         <tbody>
           {rows.map((row, index) =>
@@ -390,7 +447,7 @@ function DiffCanvas({
   className?: string;
 }) {
   return (
-    <article className={clsx("overflow-hidden rounded-2xl border border-white/10 bg-black/25", className)}>
+    <article className={clsx("overflow-hidden rounded-2xl border border-white/10 bg-[#050816]", className)}>
       <div className="flex items-center justify-between gap-3 border-b border-white/10 bg-black/40 px-3 py-3 backdrop-blur">
         <div className="min-w-0">
           <p className="truncate text-sm text-white">{diff.path}</p>
@@ -417,7 +474,7 @@ function DiffCanvas({
           )}
         </div>
       </div>
-      <div className="max-h-full overflow-auto">
+      <div className="max-h-full overflow-auto bg-[#050816]">
         {diff.tooLarge ? (
           <div className="px-3 py-4 font-mono text-[11px] leading-5 text-slate-400">Patch hidden for files larger than 2MB.</div>
         ) : diffMode === "split" ? (
@@ -540,18 +597,17 @@ function RepoFileList({
   selectedPath,
   onSelect,
   heightClass = "max-h-[32vh]",
-  dense = false,
-  grouped = false
+  dense = false
 }: {
   files: RepoFileEntry[];
   selectedPath: string | null;
   onSelect: (path: string) => void;
   heightClass?: string;
   dense?: boolean;
-  grouped?: boolean;
 }) {
-  const groups = grouped ? groupItemsByDirectory(files) : null;
   const [collapsedPaths, setCollapsedPaths] = useState<Set<string>>(new Set());
+  const tree = buildFileTree(files);
+  const directoryPaths = collectDirectoryPaths(tree);
 
   function togglePath(path: string) {
     setCollapsedPaths((current) => {
@@ -565,22 +621,46 @@ function RepoFileList({
     });
   }
 
+  function expandAll() {
+    setCollapsedPaths(new Set());
+  }
+
+  function collapseAll() {
+    setCollapsedPaths(new Set(directoryPaths));
+  }
+
   function renderTreeNode(node: FileTreeNode, depth = 0): ReactElement {
     const collapsed = collapsedPaths.has(node.path);
+    const rowPaddingLeft = `${depth * 14 + 8}px`;
 
     if (node.type === "directory") {
       return (
-        <div key={node.key} className="space-y-1">
-          <button
-            type="button"
-            onClick={() => togglePath(node.path)}
-            className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-[12px] text-slate-300 transition hover:bg-white/5"
-            style={{ paddingLeft: `${depth * 14 + 8}px` }}
+        <div key={node.key}>
+          <div
+            className="flex items-center rounded-md pr-2 transition hover:bg-white/[0.035]"
+            style={{ paddingLeft: rowPaddingLeft }}
           >
-            <span className="w-3 text-[10px] text-slate-500">{collapsed ? ">" : "v"}</span>
-            <span className="truncate">{node.name}</span>
-            <span className="ml-auto text-[10px] uppercase tracking-[0.12em] text-slate-500">{node.children.length}</span>
-          </button>
+            <button
+              type="button"
+              onClick={() => togglePath(node.path)}
+              aria-label={collapsed ? `Expand ${node.name}` : `Collapse ${node.name}`}
+              className="flex h-6 w-5 items-center justify-center rounded text-slate-600 transition hover:bg-white/10 hover:text-slate-300"
+            >
+              <TreeChevron open={!collapsed} />
+            </button>
+            <button
+              type="button"
+              onClick={() => togglePath(node.path)}
+              className={clsx(
+                "flex min-w-0 flex-1 items-center gap-2 rounded px-1.5 text-left transition",
+                dense ? "py-1 text-[12px]" : "py-1.5 text-[12px]",
+                "text-slate-400 hover:text-slate-200"
+              )}
+            >
+              <FolderIcon open={!collapsed} />
+              <span className="truncate">{node.name}</span>
+            </button>
+          </div>
           {!collapsed && <div className="space-y-1">{node.children.map((child) => renderTreeNode(child, depth + 1))}</div>}
         </div>
       );
@@ -597,14 +677,19 @@ function RepoFileList({
         type="button"
         onClick={() => onSelect(file.path)}
         className={clsx(
-          "flex w-full items-center gap-2 rounded-lg border px-2 py-1.5 text-left transition",
-          file.path === selectedPath ? "border-cyan-400/40 bg-cyan-400/10" : "border-transparent bg-white/0 hover:border-white/10 hover:bg-white/5"
+          "flex w-full items-center gap-2 rounded-md border pr-2 text-left transition",
+          dense ? "py-1" : "py-1.5",
+          file.path === selectedPath
+            ? "border-cyan-300/20 bg-[#093b49] shadow-[inset_2px_0_0_0_rgba(103,232,249,0.9)]"
+            : "border-transparent bg-transparent hover:border-white/5 hover:bg-white/[0.035]"
         )}
-        style={{ paddingLeft: `${depth * 14 + 8}px` }}
+        style={{ paddingLeft: rowPaddingLeft }}
       >
-        <span className="w-3 text-[10px] text-slate-500">{file.isImage ? "I" : "F"}</span>
-        <span className="min-w-0 flex-1 truncate text-[12px] text-white">{file.name}</span>
-        <span className={clsx("shrink-0 rounded-full px-1.5 py-0.5 text-[9px] uppercase tracking-[0.12em]", file.isImage ? "bg-cyan-400/15 text-cyan-100" : "bg-white/10 text-slate-300")}>
+        <span className="flex w-5 shrink-0 items-center justify-center">
+          <FileIcon image={file.isImage} />
+        </span>
+        <span className={clsx("min-w-0 flex-1 truncate text-[12px]", file.path === selectedPath ? "text-white" : "text-slate-300")}>{file.name}</span>
+        <span className={clsx("shrink-0 rounded-full px-1.5 py-0.5 text-[9px] uppercase tracking-[0.12em]", file.isImage ? "bg-cyan-400/10 text-cyan-200" : "bg-white/5 text-slate-400")}>
           {file.isImage ? "img" : file.extension.replace(".", "") || "file"}
         </span>
       </button>
@@ -613,21 +698,30 @@ function RepoFileList({
 
   return (
     <div className="rounded-2xl border border-white/10 bg-black/20 p-2">
-      <div className="mb-2 px-2 py-1">
-        <p className="text-xs uppercase tracking-[0.16em] text-slate-500">Files</p>
-        <p className="mt-1 text-[11px] text-slate-400">{files.length} repo files</p>
+      <div className="mb-2 flex items-start justify-between gap-3 px-2 py-1">
+        <div>
+          <p className="text-xs uppercase tracking-[0.16em] text-slate-500">Files</p>
+          <p className="mt-1 text-[11px] text-slate-400">{files.length} repo files</p>
+        </div>
+        <div className="flex items-center gap-1">
+          <button
+            type="button"
+            onClick={expandAll}
+            className="rounded-md border border-white/10 px-2 py-1 text-[10px] uppercase tracking-[0.12em] text-slate-400 transition hover:bg-white/[0.06] hover:text-slate-200"
+          >
+            Unfold All
+          </button>
+          <button
+            type="button"
+            onClick={collapseAll}
+            className="rounded-md border border-white/10 px-2 py-1 text-[10px] uppercase tracking-[0.12em] text-slate-400 transition hover:bg-white/[0.06] hover:text-slate-200"
+          >
+            Fold All
+          </button>
+        </div>
       </div>
-      <div className={clsx(heightClass, "overflow-y-auto pr-1", grouped ? "space-y-2" : "space-y-1")}>
-        {groups
-          ? groups.map((group) => (
-              <section key={group.label || "root"} className="space-y-1">
-                <div className="px-2 pt-2">
-                  <p className="text-[11px] uppercase tracking-[0.18em] text-slate-500">{group.label}</p>
-                </div>
-                <div className="space-y-1">{buildFileTree(group.items).map((node: FileTreeNode) => renderTreeNode(node))}</div>
-              </section>
-            ))
-          : buildFileTree(files).map((node: FileTreeNode) => renderTreeNode(node))}
+      <div className={clsx(heightClass, "space-y-1 overflow-y-auto pr-1")}>
+        {tree.map((node: FileTreeNode) => renderTreeNode(node))}
       </div>
     </div>
   );
@@ -639,7 +733,8 @@ function DiffFileList({
   onSelect,
   heightClass = "max-h-[32vh]",
   dense = false,
-  grouped = false
+  grouped = false,
+  showFullPath = false
 }: {
   diffs: FileDiff[];
   selectedPath: string | null;
@@ -647,6 +742,7 @@ function DiffFileList({
   heightClass?: string;
   dense?: boolean;
   grouped?: boolean;
+  showFullPath?: boolean;
 }) {
   const groups = grouped ? groupItemsByDirectory(diffs) : null;
 
@@ -678,7 +774,7 @@ function DiffFileList({
                 )}
               >
                 <div className="flex items-center justify-between gap-3">
-                  <p className="min-w-0 truncate text-[13px] text-white">{diff.path.split("/").at(-1) ?? diff.path}</p>
+                  <p className="min-w-0 truncate text-[13px] text-white">{showFullPath ? diff.path : (diff.path.split("/").at(-1) ?? diff.path)}</p>
                   <p className="shrink-0 text-[11px] text-slate-400">
                     <span className="text-lime-300">+{diff.additions}</span> <span className="text-rose-300">-{diff.deletions}</span>
                   </p>
@@ -748,15 +844,16 @@ function StatusSectionList({
             key={`${entry.section}-${entry.path}`}
             type="button"
             onClick={() => onOpen(entry, diff)}
-            className="w-full rounded-xl border border-white/10 bg-white/5 px-2.5 py-2 text-left transition hover:border-cyan-400/30 hover:bg-cyan-400/5"
+            className="w-full rounded-xl border border-white/10 bg-white/5 px-2.5 py-2 text-left transition"
           >
             <div className="flex items-center justify-between gap-3">
               <div className="min-w-0">
-                <div className="flex items-center gap-3">
-                  <span className="w-8 font-mono text-[13px] text-signal-lime">{entry.code}</span>
-                  <p className="truncate text-[13px] text-white">{entry.path}</p>
-                </div>
-                <p className="mt-0.5 text-[11px] uppercase tracking-[0.12em] text-slate-500">{entry.section}</p>
+                <p className="truncate text-[13px] text-white">{entry.path}</p>
+                <p className="mt-0.5 text-[11px] text-slate-400">
+                  <span className="font-mono text-signal-lime">{entry.code}</span>
+                  {" "}
+                  <span className="uppercase tracking-[0.12em] text-slate-500">{entry.section}</span>
+                </p>
               </div>
               <span className="shrink-0 rounded-full border border-white/10 px-2 py-0.5 text-[10px] text-slate-300">
                 {diff ? "Diff" : "Content"}
@@ -824,7 +921,7 @@ function MobileWorkspace({
   return (
     <main className="rounded-3xl border border-white/10 bg-white/5 p-3 shadow-panel backdrop-blur">
       <div className="mb-3 overflow-x-auto rounded-2xl bg-black/20 p-1">
-        <div className="grid min-w-max grid-cols-5 gap-2">
+        <div className="grid min-w-max grid-cols-4 gap-2">
           {tabItems.map((item) => (
             <button key={item} type="button" onClick={() => setTab(item)} className={clsx("rounded-xl px-3 py-3 text-xs font-medium capitalize transition", tab === item ? "bg-white text-slate-900" : "text-slate-400")}>
               {item}
@@ -973,7 +1070,7 @@ function MobileWorkspace({
                 <p className="mt-1 text-xs text-slate-400">{selectedCommit.hash.slice(0, 7)}</p>
               </div>
               {commitFiles.length > 0 ? (
-                <div className="space-y-1.5">
+                <div className="space-y-1">
                   {commitFiles.map((file) => (
                     <button
                       key={file.path}
@@ -988,7 +1085,7 @@ function MobileWorkspace({
                         <div className="min-w-0">
                           <p className="truncate text-[13px] text-white">{file.path}</p>
                           <p className="mt-0.5 text-[11px] text-slate-400">
-                            <span className="text-lime-300">+{file.additions}</span> / <span className="text-rose-300">-{file.deletions}</span>
+                            <span className="text-lime-300">+{file.additions}</span> <span className="text-rose-300">-{file.deletions}</span>
                           </p>
                         </div>
                         <span className="shrink-0 rounded-full border border-white/10 px-2 py-0.5 text-[10px] text-slate-300">Open</span>
@@ -1062,7 +1159,7 @@ function DesktopWorkspace({
     <main className="rounded-[28px] border border-white/10 bg-white/5 p-4 shadow-panel backdrop-blur">
       <div className="mb-4 flex items-center justify-between gap-4">
         <div className="overflow-x-auto rounded-2xl bg-black/20 p-1">
-          <div className="grid min-w-max grid-cols-5 gap-2">
+          <div className="grid min-w-max grid-cols-4 gap-2">
             {tabItems.map((item) => (
               <button key={item} type="button" onClick={() => setTab(item)} className={clsx("rounded-xl px-4 py-3 text-sm font-medium capitalize transition", tab === item ? "bg-white text-slate-900" : "text-slate-400")}>
                 {item}
@@ -1127,7 +1224,6 @@ function DesktopWorkspace({
             }}
             heightClass="max-h-[calc(100vh-20rem)]"
             dense
-            grouped
           />
           {viewer && viewer.kind === "content" ? <ViewerPanel viewer={viewer} diffMode={diffMode} /> : <EmptyPanel title="Select a repo file" body="Code files render with syntax highlighting and images preview inline." />}
         </div>
@@ -1148,7 +1244,7 @@ function DesktopWorkspace({
               </div>
             </div>
             <div className="grid gap-3 xl:grid-cols-[320px_minmax(0,1fr)]">
-              <DiffFileList diffs={diffs} selectedPath={selectedDiff.path} onSelect={setSelectedDiffPath} heightClass="max-h-[calc(100vh-20rem)]" dense grouped />
+              <DiffFileList diffs={diffs} selectedPath={selectedDiff.path} onSelect={setSelectedDiffPath} heightClass="max-h-[calc(100vh-20rem)]" dense showFullPath />
               <DiffCanvas diff={selectedDiff} diffMode={diffMode} className="min-h-[70vh]" />
             </div>
           </section>
@@ -1183,7 +1279,7 @@ function DesktopWorkspace({
               <p className="mt-1 text-xs text-slate-400">{selectedCommit ? selectedCommit.hash.slice(0, 7) : "Select a commit"}</p>
             </div>
             {selectedCommit && commitFiles.length > 0 ? (
-              <div className="space-y-1.5">
+              <div className="space-y-1">
                 {commitFiles.map((file) => (
                   <button
                     key={file.path}
@@ -1198,7 +1294,7 @@ function DesktopWorkspace({
                       <div className="min-w-0">
                         <p className="truncate text-[13px] text-white">{file.path}</p>
                         <p className="mt-0.5 text-[11px] text-slate-400">
-                          <span className="text-lime-300">+{file.additions}</span> / <span className="text-rose-300">-{file.deletions}</span>
+                          <span className="text-lime-300">+{file.additions}</span> <span className="text-rose-300">-{file.deletions}</span>
                         </p>
                       </div>
                       <span className="shrink-0 rounded-full border border-white/10 px-2 py-0.5 text-[10px] text-slate-300">Open</span>
@@ -1593,16 +1689,16 @@ export function App() {
               <p className="mt-2 text-xl font-semibold text-white">{projects.length}</p>
             </div>
             <div className="rounded-xl border border-white/10 bg-white/5 px-4 py-3">
-              <p className="text-[11px] uppercase tracking-[0.2em] text-slate-500">Files</p>
+              <p className="text-[11px] uppercase tracking-[0.2em] text-slate-500">Repo Files</p>
               <p className="mt-2 text-xl font-semibold text-white">{repoFiles.length}</p>
             </div>
             <div className="rounded-xl border border-white/10 bg-white/5 px-4 py-3">
-              <p className="text-[11px] uppercase tracking-[0.2em] text-slate-500">Unstaged</p>
-              <p className="mt-2 text-xl font-semibold text-amber-300">{countBySection(status, "unstaged")}</p>
+              <p className="text-[11px] uppercase tracking-[0.2em] text-slate-500">Working Changes</p>
+              <p className="mt-2 text-xl font-semibold text-amber-300">{countWorkingChanges(status)}</p>
             </div>
             <div className="rounded-xl border border-white/10 bg-white/5 px-4 py-3">
-              <p className="text-[11px] uppercase tracking-[0.2em] text-slate-500">Conflicts</p>
-              <p className="mt-2 text-xl font-semibold text-rose-300">{countBySection(status, "conflicted")}</p>
+              <p className="text-[11px] uppercase tracking-[0.2em] text-slate-500">Recent Commits</p>
+              <p className="mt-2 text-xl font-semibold text-cyan-200">{commits.length}</p>
             </div>
           </div>
         )}
