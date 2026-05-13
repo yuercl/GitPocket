@@ -40,3 +40,27 @@ Leave `VITE_API_BASE` empty when the web app is reverse proxied with the API on 
 If `ALLOWED_REPO_ROOTS` is empty, GitPocket trusts all local paths by default. Set it to a comma-separated allowlist only when you want to restrict filesystem access.
 
 Projects are persisted on the server in `PROJECTS_FILE`, so refreshing the browser or opening GitPocket from another browser still shows the saved repo list.
+
+## Screenshots
+
+These screenshots were captured from the running GitPocket app against this repository (`/data/code/GitPocket`) on May 13, 2026.
+
+### Desktop
+
+Files view with tree navigation and inline preview:
+
+![GitPocket desktop files view](docs/screenshots/desktop-files.png)
+
+Commits view with the three-column layout:
+
+![GitPocket desktop commits view](docs/screenshots/desktop-commits.png)
+
+### Mobile
+
+Files view on a phone-sized viewport:
+
+![GitPocket mobile files view](docs/screenshots/mobile-files.png)
+
+Diff view on a phone-sized viewport:
+
+![GitPocket mobile diff view](docs/screenshots/mobile-diff.png)
