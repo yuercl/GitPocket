@@ -7,6 +7,7 @@ import {
   getCommitFiles,
   getProjectDiff,
   getFileContent,
+  getRepoFiles,
   getProjectLog,
   getProjectStatus,
   listDirectory,
@@ -154,6 +155,25 @@ app.get("/api/projects/:id/file", async (request, reply) => {
   } catch (error) {
     return reply.code(400).send({
       error: error instanceof Error ? error.message : "Failed to load file content"
+    });
+  }
+});
+
+app.get("/api/projects/:id/files", async (request, reply) => {
+  const project = projectStore.getProject((request.params as { id: string }).id);
+  if (!project) {
+    return reply.code(404).send({ error: "Project not found" });
+  }
+
+  const query = request.query as { ref?: string };
+
+  try {
+    return {
+      items: await getRepoFiles(project.path, policy, query.ref)
+    };
+  } catch (error) {
+    return reply.code(400).send({
+      error: error instanceof Error ? error.message : "Failed to load files"
     });
   }
 });

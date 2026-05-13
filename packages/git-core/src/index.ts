@@ -1,5 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { execFile as execFileCallback } from "node:child_process";
+import { promisify } from "node:util";
 import { simpleGit } from "simple-git";
 import type {
   BranchRecord,
@@ -9,11 +11,14 @@ import type {
   FileDiff,
   ProjectRecord,
   ProjectStatus,
+  RepoFileEntry,
   StatusEntry
 } from "@gitpocket/shared";
 
 const LARGE_FILE_PATCH_LIMIT = 2 * 1024 * 1024;
 const LARGE_FILE_CONTENT_LIMIT = 512 * 1024;
+const execFile = promisify(execFileCallback);
+const IMAGE_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".svg", ".ico", ".avif"]);
 
 export type RepoAccessPolicy = {
   allowedRoots: string[];
@@ -32,6 +37,90 @@ function createGit(repoPath: string) {
     binary: "git",
     maxConcurrentProcesses: 4
   });
+}
+
+function getMimeType(filePath: string) {
+  const extension = path.extname(filePath).toLowerCase();
+  switch (extension) {
+    case ".png":
+      return "image/png";
+    case ".jpg":
+    case ".jpeg":
+      return "image/jpeg";
+    case ".gif":
+      return "image/gif";
+    case ".webp":
+      return "image/webp";
+    case ".bmp":
+      return "image/bmp";
+    case ".svg":
+      return "image/svg+xml";
+    case ".ico":
+      return "image/x-icon";
+    case ".avif":
+      return "image/avif";
+    case ".json":
+      return "application/json";
+    case ".md":
+      return "text/markdown";
+    case ".html":
+      return "text/html";
+    case ".css":
+      return "text/css";
+    case ".js":
+    case ".mjs":
+    case ".cjs":
+      return "text/javascript";
+    case ".ts":
+    case ".tsx":
+      return "text/typescript";
+    case ".jsx":
+      return "text/jsx";
+    case ".yml":
+    case ".yaml":
+      return "text/yaml";
+    case ".sh":
+      return "text/x-shellscript";
+    default:
+      return null;
+  }
+}
+
+function isImagePath(filePath: string) {
+  return IMAGE_EXTENSIONS.has(path.extname(filePath).toLowerCase());
+}
+
+function looksBinary(buffer: Buffer) {
+  if (buffer.length === 0) {
+    return false;
+  }
+
+  const sample = buffer.subarray(0, Math.min(buffer.length, 1024));
+  for (const byte of sample) {
+    if (byte === 0) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function toRepoFileEntry(filePath: string): RepoFileEntry {
+  const extension = path.extname(filePath).toLowerCase();
+  return {
+    path: filePath,
+    name: path.basename(filePath),
+    extension,
+    isImage: isImagePath(filePath)
+  };
+}
+
+async function readGitObject(repoPath: string, spec: string) {
+  const { stdout } = await execFile("git", ["show", spec], {
+    cwd: repoPath,
+    encoding: "buffer",
+    maxBuffer: LARGE_FILE_CONTENT_LIMIT * 8
+  });
+  return stdout;
 }
 
 function ensureInsideAllowedRoots(repoPath: string, policy: RepoAccessPolicy) {
@@ -273,6 +362,21 @@ export async function getProjectBranches(repoPath: string, policy: RepoAccessPol
   }));
 }
 
+export async function getRepoFiles(repoPath: string, policy: RepoAccessPolicy, ref?: string): Promise<RepoFileEntry[]> {
+  const resolved = await validateRepo(repoPath, policy);
+  const git = createGit(resolved);
+  const raw = ref
+    ? await git.raw(["ls-tree", "-r", "--name-only", ref])
+    : await git.raw(["ls-files", "--cached", "--others", "--exclude-standard"]);
+
+  return raw
+    .split("\n")
+    .map((item) => item.trim())
+    .filter(Boolean)
+    .sort((left, right) => left.localeCompare(right))
+    .map(toRepoFileEntry);
+}
+
 export async function getFileContent(
   repoPath: string,
   filePath: string,
@@ -280,26 +384,42 @@ export async function getFileContent(
   ref?: string
 ): Promise<FileContent> {
   const resolved = await validateRepo(repoPath, policy);
-  const git = createGit(resolved);
+  const buffer = ref ? await readGitObject(resolved, `${ref}:${filePath}`) : await fs.readFile(path.join(resolved, filePath));
+  const tooLarge = buffer.byteLength > LARGE_FILE_CONTENT_LIMIT;
+  const mimeType = getMimeType(filePath);
+  const image = isImagePath(filePath);
 
-  if (ref) {
-    const content = await git.show([`${ref}:${filePath}`]);
-    const tooLarge = Buffer.byteLength(content, "utf8") > LARGE_FILE_CONTENT_LIMIT;
+  if (image) {
     return {
       path: filePath,
-      ref,
-      content: tooLarge ? "" : content,
+      ref: ref ?? null,
+      kind: "image",
+      mimeType,
+      encoding: "base64",
+      content: tooLarge ? "" : buffer.toString("base64"),
       tooLarge
     };
   }
 
-  const absolutePath = path.join(resolved, filePath);
-  const content = await fs.readFile(absolutePath, "utf8");
-  const tooLarge = Buffer.byteLength(content, "utf8") > LARGE_FILE_CONTENT_LIMIT;
+  if (looksBinary(buffer)) {
+    return {
+      path: filePath,
+      ref: ref ?? null,
+      kind: "binary",
+      mimeType,
+      encoding: "base64",
+      content: "",
+      tooLarge
+    };
+  }
+
   return {
     path: filePath,
-    ref: null,
-    content: tooLarge ? "" : content,
+    ref: ref ?? null,
+    kind: "text",
+    mimeType,
+    encoding: "utf8",
+    content: tooLarge ? "" : buffer.toString("utf8"),
     tooLarge
   };
 }

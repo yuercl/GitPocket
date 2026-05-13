@@ -1,6 +1,18 @@
-import type { FormEvent } from "react";
+import type { FormEvent, ReactElement } from "react";
 import { useEffect, useState } from "react";
 import clsx from "clsx";
+import Prism from "prismjs";
+import "prismjs/components/prism-bash";
+import "prismjs/components/prism-clike";
+import "prismjs/components/prism-css";
+import "prismjs/components/prism-javascript";
+import "prismjs/components/prism-jsx";
+import "prismjs/components/prism-json";
+import "prismjs/components/prism-markdown";
+import "prismjs/components/prism-markup";
+import "prismjs/components/prism-tsx";
+import "prismjs/components/prism-typescript";
+import "prismjs/components/prism-yaml";
 import type {
   BranchRecord,
   CommitRecord,
@@ -11,10 +23,12 @@ import type {
   ProjectRecord,
   ProjectStatus,
   ProjectStatusSection,
+  RepoFileEntry,
   StatusEntry
 } from "@gitpocket/shared";
 
 const API_BASE = import.meta.env.VITE_API_BASE?.replace(/\/$/, "") ?? "";
+const ACTIVE_PROJECT_STORAGE_KEY = "gitpocket.active-project-id";
 
 type ProjectResponse = { items: ProjectRecord[] };
 type DiffResponse = { items: FileDiff[] };
@@ -22,9 +36,20 @@ type CommitResponse = { items: CommitRecord[] };
 type BranchResponse = { items: BranchRecord[] };
 type RootsResponse = { items: DirectoryRoot[] };
 type CommitFilesResponse = { items: FileDiff[] };
+type RepoFilesResponse = { items: RepoFileEntry[] };
 type DiffMode = "inline" | "split";
+type AppTab = "status" | "files" | "diff" | "commits" | "branches";
 type Viewer =
-  | { kind: "content"; path: string; ref: string | null; content: string; tooLarge?: boolean }
+  | {
+      kind: "content";
+      path: string;
+      ref: string | null;
+      content: string;
+      contentKind: FileContent["kind"];
+      mimeType: string | null;
+      encoding: FileContent["encoding"];
+      tooLarge?: boolean;
+    }
   | { kind: "diff"; path: string; patch: string; tooLarge?: boolean };
 
 type DiffRow = {
@@ -35,13 +60,22 @@ type DiffRow = {
   rightText: string;
 };
 
-type DiffGroup = {
+type DiffGroup<T extends { path: string }> = {
   label: string;
-  items: FileDiff[];
+  items: T[];
+};
+
+type FileTreeNode = {
+  key: string;
+  name: string;
+  path: string;
+  type: "directory" | "file";
+  file?: RepoFileEntry;
+  children: FileTreeNode[];
 };
 
 const sectionOrder: ProjectStatusSection[] = ["conflicted", "staged", "unstaged", "untracked"];
-const tabItems = ["status", "diff", "commits", "branches"] as const;
+const tabItems: AppTab[] = ["status", "files", "diff", "commits", "branches"];
 
 async function safeFetch<T>(path: string): Promise<T> {
   const response = await fetch(`${API_BASE}${path}`);
@@ -154,22 +188,118 @@ function getDiffGroupLabel(path: string) {
   return parts.length <= 1 ? "root" : parts.slice(0, -1).join("/");
 }
 
-function groupDiffsByDirectory(diffs: FileDiff[]): DiffGroup[] {
-  const groups = new Map<string, FileDiff[]>();
+function groupItemsByDirectory<T extends { path: string }>(items: T[]): DiffGroup<T>[] {
+  const groups = new Map<string, T[]>();
 
-  for (const diff of diffs) {
-    const label = getDiffGroupLabel(diff.path);
-    const items = groups.get(label) ?? [];
-    items.push(diff);
-    groups.set(label, items);
+  for (const item of items) {
+    const label = getDiffGroupLabel(item.path);
+    const bucket = groups.get(label) ?? [];
+    bucket.push(item);
+    groups.set(label, bucket);
   }
 
   return Array.from(groups.entries())
     .sort(([left], [right]) => left.localeCompare(right))
-    .map(([label, items]) => ({
+    .map(([label, groupItems]) => ({
       label,
-      items: items.sort((a, b) => a.path.localeCompare(b.path))
+      items: groupItems.sort((left, right) => left.path.localeCompare(right.path))
     }));
+}
+
+function getPrismLanguage(path: string, mimeType: string | null) {
+  const extension = path.split(".").pop()?.toLowerCase() ?? "";
+  if (mimeType === "application/json" || extension === "json") {
+    return "json";
+  }
+  if (["ts", "mts", "cts"].includes(extension)) {
+    return "typescript";
+  }
+  if (extension === "tsx") {
+    return "tsx";
+  }
+  if (["js", "mjs", "cjs"].includes(extension)) {
+    return "javascript";
+  }
+  if (extension === "jsx") {
+    return "jsx";
+  }
+  if (["html", "xml", "svg"].includes(extension)) {
+    return "markup";
+  }
+  if (extension === "css") {
+    return "css";
+  }
+  if (["md", "markdown"].includes(extension)) {
+    return "markdown";
+  }
+  if (["yml", "yaml"].includes(extension)) {
+    return "yaml";
+  }
+  if (["sh", "bash", "zsh"].includes(extension)) {
+    return "bash";
+  }
+  return "clike";
+}
+
+function getCodeHtml(content: string, path: string, mimeType: string | null) {
+  const language = getPrismLanguage(path, mimeType);
+  const grammar = Prism.languages[language] ?? Prism.languages.clike;
+  return Prism.highlight(content, grammar, language);
+}
+
+function buildFileTree(files: RepoFileEntry[]) {
+  const root: FileTreeNode = {
+    key: "root",
+    name: "root",
+    path: "",
+    type: "directory",
+    children: []
+  };
+
+  for (const file of files) {
+    const parts = file.path.split("/").filter(Boolean);
+    let current = root;
+
+    parts.forEach((part, index) => {
+      const currentPath = parts.slice(0, index + 1).join("/");
+      const isLeaf = index === parts.length - 1;
+      let child = current.children.find((item) => item.name === part);
+
+      if (!child) {
+        child = {
+          key: currentPath,
+          name: part,
+          path: currentPath,
+          type: isLeaf ? "file" : "directory",
+          file: isLeaf ? file : undefined,
+          children: []
+        };
+        current.children.push(child);
+      }
+
+      if (isLeaf) {
+        child.type = "file";
+        child.file = file;
+      }
+
+      current = child;
+    });
+  }
+
+  const sortNodes = (nodes: FileTreeNode[]): FileTreeNode[] =>
+    nodes
+      .sort((left, right) => {
+        if (left.type !== right.type) {
+          return left.type === "directory" ? -1 : 1;
+        }
+        return left.name.localeCompare(right.name);
+      })
+      .map((node) => ({
+        ...node,
+        children: sortNodes(node.children)
+      }));
+
+  return sortNodes(root.children);
 }
 
 function EmptyPanel({ title, body }: { title: string; body: string }) {
@@ -244,87 +374,6 @@ function DiffSplit({ rows }: { rows: DiffRow[] }) {
   );
 }
 
-function DiffFileList({
-  diffs,
-  selectedPath,
-  onSelect,
-  heightClass = "max-h-[32vh]",
-  dense = false,
-  grouped = false
-}: {
-  diffs: FileDiff[];
-  selectedPath: string | null;
-  onSelect: (path: string) => void;
-  heightClass?: string;
-  dense?: boolean;
-  grouped?: boolean;
-}) {
-  const groups = grouped ? groupDiffsByDirectory(diffs) : null;
-
-  return (
-    <div className="rounded-2xl border border-white/10 bg-black/20 p-2">
-      <div className="mb-2 flex items-center justify-between px-2 py-1">
-        <div>
-          <p className="text-xs uppercase tracking-[0.16em] text-slate-500">Changed Files</p>
-          <p className="mt-1 text-[11px] text-slate-400">{diffs.length} files with patch output</p>
-        </div>
-      </div>
-      <div className={clsx(heightClass, "space-y-2 overflow-y-auto pr-1")}>
-        {groups
-          ? groups.map((group) => (
-              <section key={group.label} className="space-y-2">
-                <div className="px-2 pt-2">
-                  <p className="text-[11px] uppercase tracking-[0.18em] text-slate-500">{group.label}</p>
-                </div>
-                {group.items.map((diff) => (
-                  <button
-                    key={diff.path}
-                    type="button"
-                    onClick={() => onSelect(diff.path)}
-                    className={clsx(
-                      "w-full rounded-xl border text-left transition",
-                      dense ? "px-3 py-2.5" : "px-3 py-3",
-                      diff.path === selectedPath ? "border-cyan-400/40 bg-cyan-400/10" : "border-white/10 bg-white/5"
-                    )}
-                  >
-                    <div className="flex items-center justify-between gap-3">
-                      <p className="min-w-0 truncate text-sm text-white">{diff.path.split("/").at(-1) ?? diff.path}</p>
-                      <p className="shrink-0 text-[11px] text-slate-400">
-                        <span className="text-lime-300">+{diff.additions}</span>
-                        {" "}
-                        <span className="text-rose-300">-{diff.deletions}</span>
-                      </p>
-                    </div>
-                  </button>
-                ))}
-              </section>
-            ))
-          : diffs.map((diff) => (
-              <button
-                key={diff.path}
-                type="button"
-                onClick={() => onSelect(diff.path)}
-                className={clsx(
-                  "w-full rounded-xl border text-left transition",
-                  dense ? "px-3 py-2.5" : "px-3 py-3",
-                  diff.path === selectedPath ? "border-cyan-400/40 bg-cyan-400/10" : "border-white/10 bg-white/5"
-                )}
-              >
-                <div className="flex items-center justify-between gap-3">
-                  <p className="min-w-0 truncate text-sm text-white">{diff.path}</p>
-                  <p className="shrink-0 text-[11px] text-slate-400">
-                    <span className="text-lime-300">+{diff.additions}</span>
-                    {" "}
-                    <span className="text-rose-300">-{diff.deletions}</span>
-                  </p>
-                </div>
-              </button>
-            ))}
-      </div>
-    </div>
-  );
-}
-
 function DiffCanvas({
   diff,
   diffMode,
@@ -388,12 +437,52 @@ function DiffCanvas({
   );
 }
 
+function ContentCanvas({ viewer }: { viewer: Extract<Viewer, { kind: "content" }> }) {
+  if (viewer.tooLarge) {
+    return <div className="font-mono text-[11px] leading-5 text-slate-400">File too large to preview.</div>;
+  }
+
+  if (viewer.contentKind === "image") {
+    return (
+      <div className="overflow-auto rounded-2xl border border-white/10 bg-black/30 p-4">
+        <img
+          src={`data:${viewer.mimeType ?? "image/*"};base64,${viewer.content}`}
+          alt={viewer.path}
+          className="mx-auto max-h-[72vh] w-auto max-w-full rounded-xl"
+        />
+      </div>
+    );
+  }
+
+  if (viewer.contentKind === "binary") {
+    return <div className="font-mono text-[11px] leading-5 text-slate-400">Binary file preview is not supported.</div>;
+  }
+
+  return (
+    <pre
+      className="prism-code overflow-auto rounded-2xl border border-white/10 bg-[#050816] p-4 text-[12px] leading-6 text-slate-100"
+      dangerouslySetInnerHTML={{ __html: getCodeHtml(viewer.content, viewer.path, viewer.mimeType) }}
+    />
+  );
+}
+
 function ViewerPanel({ viewer, diffMode }: { viewer: Viewer; diffMode: DiffMode }) {
+  const previewLabel =
+    viewer.kind === "diff"
+      ? "diff preview"
+      : viewer.contentKind === "image"
+        ? "image preview"
+        : viewer.contentKind === "binary"
+          ? "binary file"
+          : viewer.ref
+            ? `ref: ${viewer.ref}`
+            : "working tree";
+
   return (
     <section className="rounded-2xl border border-white/10 bg-black/20 p-3">
       <div className="mb-3">
         <p className="text-sm font-medium text-white">{viewer.path}</p>
-        <p className="mt-1 text-xs text-slate-400">{viewer.kind === "diff" ? "diff preview" : viewer.ref ? `ref: ${viewer.ref}` : "working tree"}</p>
+        <p className="mt-1 text-xs text-slate-400">{previewLabel}</p>
       </div>
       {viewer.kind === "diff" ? (
         viewer.tooLarge ? (
@@ -411,9 +500,7 @@ function ViewerPanel({ viewer, diffMode }: { viewer: Viewer; diffMode: DiffMode 
           <DiffInline rows={parsePatch(viewer.patch)} />
         )
       ) : (
-        <pre className="overflow-x-auto whitespace-pre-wrap font-mono text-[11px] leading-5 text-slate-200">
-          {viewer.tooLarge ? "File too large to preview." : viewer.content}
-        </pre>
+        <ContentCanvas viewer={viewer} />
       )}
     </section>
   );
@@ -426,7 +513,15 @@ function FullscreenViewer({ viewer, diffMode, onClose }: { viewer: Viewer; diffM
         <div className="flex items-center justify-between border-b border-white/10 px-4 py-3">
           <div className="min-w-0">
             <p className="truncate text-sm text-white">{viewer.path}</p>
-            <p className="mt-1 text-xs text-slate-400">{viewer.kind === "diff" ? "diff preview" : viewer.ref ? `ref: ${viewer.ref}` : "working tree"}</p>
+            <p className="mt-1 text-xs text-slate-400">
+              {viewer.kind === "diff"
+                ? "diff preview"
+                : viewer.contentKind === "image"
+                  ? "image preview"
+                  : viewer.ref
+                    ? `ref: ${viewer.ref}`
+                    : "working tree"}
+            </p>
           </div>
           <button type="button" onClick={onClose} className="rounded-xl border border-white/10 px-3 py-2 text-xs text-slate-200">
             Close
@@ -440,19 +535,718 @@ function FullscreenViewer({ viewer, diffMode, onClose }: { viewer: Viewer; diffM
   );
 }
 
+function RepoFileList({
+  files,
+  selectedPath,
+  onSelect,
+  heightClass = "max-h-[32vh]",
+  dense = false,
+  grouped = false
+}: {
+  files: RepoFileEntry[];
+  selectedPath: string | null;
+  onSelect: (path: string) => void;
+  heightClass?: string;
+  dense?: boolean;
+  grouped?: boolean;
+}) {
+  const groups = grouped ? groupItemsByDirectory(files) : null;
+  const [collapsedPaths, setCollapsedPaths] = useState<Set<string>>(new Set());
+
+  function togglePath(path: string) {
+    setCollapsedPaths((current) => {
+      const next = new Set(current);
+      if (next.has(path)) {
+        next.delete(path);
+      } else {
+        next.add(path);
+      }
+      return next;
+    });
+  }
+
+  function renderTreeNode(node: FileTreeNode, depth = 0): ReactElement {
+    const collapsed = collapsedPaths.has(node.path);
+
+    if (node.type === "directory") {
+      return (
+        <div key={node.key} className="space-y-1">
+          <button
+            type="button"
+            onClick={() => togglePath(node.path)}
+            className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-[12px] text-slate-300 transition hover:bg-white/5"
+            style={{ paddingLeft: `${depth * 14 + 8}px` }}
+          >
+            <span className="w-3 text-[10px] text-slate-500">{collapsed ? ">" : "v"}</span>
+            <span className="truncate">{node.name}</span>
+            <span className="ml-auto text-[10px] uppercase tracking-[0.12em] text-slate-500">{node.children.length}</span>
+          </button>
+          {!collapsed && <div className="space-y-1">{node.children.map((child) => renderTreeNode(child, depth + 1))}</div>}
+        </div>
+      );
+    }
+
+    const file = node.file;
+    if (!file) {
+      return <div key={node.key} />;
+    }
+
+    return (
+      <button
+        key={node.key}
+        type="button"
+        onClick={() => onSelect(file.path)}
+        className={clsx(
+          "flex w-full items-center gap-2 rounded-lg border px-2 py-1.5 text-left transition",
+          file.path === selectedPath ? "border-cyan-400/40 bg-cyan-400/10" : "border-transparent bg-white/0 hover:border-white/10 hover:bg-white/5"
+        )}
+        style={{ paddingLeft: `${depth * 14 + 8}px` }}
+      >
+        <span className="w-3 text-[10px] text-slate-500">{file.isImage ? "I" : "F"}</span>
+        <span className="min-w-0 flex-1 truncate text-[12px] text-white">{file.name}</span>
+        <span className={clsx("shrink-0 rounded-full px-1.5 py-0.5 text-[9px] uppercase tracking-[0.12em]", file.isImage ? "bg-cyan-400/15 text-cyan-100" : "bg-white/10 text-slate-300")}>
+          {file.isImage ? "img" : file.extension.replace(".", "") || "file"}
+        </span>
+      </button>
+    );
+  }
+
+  return (
+    <div className="rounded-2xl border border-white/10 bg-black/20 p-2">
+      <div className="mb-2 px-2 py-1">
+        <p className="text-xs uppercase tracking-[0.16em] text-slate-500">Files</p>
+        <p className="mt-1 text-[11px] text-slate-400">{files.length} repo files</p>
+      </div>
+      <div className={clsx(heightClass, "overflow-y-auto pr-1", grouped ? "space-y-2" : "space-y-1")}>
+        {groups
+          ? groups.map((group) => (
+              <section key={group.label || "root"} className="space-y-1">
+                <div className="px-2 pt-2">
+                  <p className="text-[11px] uppercase tracking-[0.18em] text-slate-500">{group.label}</p>
+                </div>
+                <div className="space-y-1">{buildFileTree(group.items).map((node: FileTreeNode) => renderTreeNode(node))}</div>
+              </section>
+            ))
+          : buildFileTree(files).map((node: FileTreeNode) => renderTreeNode(node))}
+      </div>
+    </div>
+  );
+}
+
+function DiffFileList({
+  diffs,
+  selectedPath,
+  onSelect,
+  heightClass = "max-h-[32vh]",
+  dense = false,
+  grouped = false
+}: {
+  diffs: FileDiff[];
+  selectedPath: string | null;
+  onSelect: (path: string) => void;
+  heightClass?: string;
+  dense?: boolean;
+  grouped?: boolean;
+}) {
+  const groups = grouped ? groupItemsByDirectory(diffs) : null;
+
+  return (
+    <div className="rounded-2xl border border-white/10 bg-black/20 p-2">
+      <div className="mb-2 flex items-center justify-between px-2 py-1">
+        <div>
+          <p className="text-xs uppercase tracking-[0.16em] text-slate-500">Changed Files</p>
+          <p className="mt-1 text-[11px] text-slate-400">{diffs.length} files with patch output</p>
+        </div>
+      </div>
+      <div className={clsx(heightClass, "space-y-1 overflow-y-auto pr-1")}>
+        {(groups ?? [{ label: "", items: diffs }]).map((group) => (
+          <section key={group.label || "root"} className="space-y-1">
+            {groups && (
+              <div className="px-2 pt-2">
+                <p className="text-[11px] uppercase tracking-[0.18em] text-slate-500">{group.label}</p>
+              </div>
+            )}
+            {group.items.map((diff) => (
+              <button
+                key={diff.path}
+                type="button"
+                onClick={() => onSelect(diff.path)}
+                className={clsx(
+                  "w-full rounded-xl border text-left transition",
+                  dense ? "px-2.5 py-2" : "px-2.5 py-2.5",
+                  diff.path === selectedPath ? "border-cyan-400/40 bg-cyan-400/10" : "border-white/10 bg-white/5"
+                )}
+              >
+                <div className="flex items-center justify-between gap-3">
+                  <p className="min-w-0 truncate text-[13px] text-white">{diff.path.split("/").at(-1) ?? diff.path}</p>
+                  <p className="shrink-0 text-[11px] text-slate-400">
+                    <span className="text-lime-300">+{diff.additions}</span> <span className="text-rose-300">-{diff.deletions}</span>
+                  </p>
+                </div>
+              </button>
+            ))}
+          </section>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+type WorkspaceProps = {
+  activeProject: ProjectRecord | null;
+  status: ProjectStatus | null;
+  diffs: FileDiff[];
+  selectedDiff: FileDiff | null;
+  setSelectedDiffPath: (path: string) => void;
+  repoFiles: RepoFileEntry[];
+  selectedRepoFilePath: string | null;
+  setSelectedRepoFilePath: (path: string | null) => void;
+  commits: CommitRecord[];
+  selectedCommit: CommitRecord | null;
+  selectedCommitHash: string | null;
+  commitFiles: FileDiff[];
+  selectedCommitFilePath: string | null;
+  setSelectedCommitFilePath: (path: string | null) => void;
+  setSelectedCommitHash: (hash: string) => void;
+  setViewer: (viewer: Viewer | null) => void;
+  viewer: Viewer | null;
+  branches: BranchRecord[];
+  compactPortrait: boolean;
+  compactLandscape: boolean;
+  mobileDiffOpen: boolean;
+  setMobileDiffOpen: (value: boolean) => void;
+  tab: AppTab;
+  setTab: (tab: AppTab) => void;
+  previousTab: AppTab | null;
+  setPreviousTab: (tab: AppTab | null) => void;
+  diffMode: DiffMode;
+  setDiffMode: (mode: DiffMode) => void;
+  panelError: string | null;
+  loadingDetails: boolean;
+  sections: ProjectStatusSection[];
+  openWorkingDiff: (path: string) => void;
+  loadFileContent: (path: string, ref?: string | null) => Promise<void>;
+  openCommitFile: (file: FileDiff) => Promise<void>;
+  openRepoFile: (path: string) => Promise<void>;
+};
+
+function StatusSectionList({
+  items,
+  diffs,
+  onOpen
+}: {
+  items: StatusEntry[];
+  diffs: FileDiff[];
+  onOpen: (entry: StatusEntry, diff: FileDiff | null) => void;
+}) {
+  return (
+    <div className="space-y-1.5">
+      {items.map((entry) => {
+        const diff = diffs.find((item) => item.path === entry.path) ?? null;
+        return (
+          <button
+            key={`${entry.section}-${entry.path}`}
+            type="button"
+            onClick={() => onOpen(entry, diff)}
+            className="w-full rounded-xl border border-white/10 bg-white/5 px-2.5 py-2 text-left transition hover:border-cyan-400/30 hover:bg-cyan-400/5"
+          >
+            <div className="flex items-center justify-between gap-3">
+              <div className="min-w-0">
+                <div className="flex items-center gap-3">
+                  <span className="w-8 font-mono text-[13px] text-signal-lime">{entry.code}</span>
+                  <p className="truncate text-[13px] text-white">{entry.path}</p>
+                </div>
+                <p className="mt-0.5 text-[11px] uppercase tracking-[0.12em] text-slate-500">{entry.section}</p>
+              </div>
+              <span className="shrink-0 rounded-full border border-white/10 px-2 py-0.5 text-[10px] text-slate-300">
+                {diff ? "Diff" : "Content"}
+              </span>
+            </div>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function MobileWorkspace({
+  activeProject,
+  status,
+  diffs,
+  selectedDiff,
+  setSelectedDiffPath,
+  repoFiles,
+  selectedRepoFilePath,
+  setSelectedRepoFilePath,
+  commits,
+  selectedCommit,
+  selectedCommitHash,
+  commitFiles,
+  selectedCommitFilePath,
+  setSelectedCommitFilePath,
+  setSelectedCommitHash,
+  setViewer,
+  viewer,
+  branches,
+  compactPortrait,
+  compactLandscape,
+  mobileDiffOpen,
+  setMobileDiffOpen,
+  tab,
+  setTab,
+  previousTab,
+  setPreviousTab,
+  diffMode,
+  setDiffMode,
+  panelError,
+  loadingDetails,
+  sections,
+  openWorkingDiff,
+  loadFileContent,
+  openCommitFile,
+  openRepoFile
+}: WorkspaceProps) {
+  const selectedDiffIndex = selectedDiff ? diffs.findIndex((diff) => diff.path === selectedDiff.path) : -1;
+
+  function selectDiffAt(index: number) {
+    const nextDiff = diffs[index];
+    if (!nextDiff) {
+      return;
+    }
+    setSelectedDiffPath(nextDiff.path);
+    setMobileDiffOpen(true);
+  }
+
+  if (!activeProject) {
+    return <EmptyPanel title="No active repository" body="Pick a saved project from the workspace menu." />;
+  }
+
+  return (
+    <main className="rounded-3xl border border-white/10 bg-white/5 p-3 shadow-panel backdrop-blur">
+      <div className="mb-3 overflow-x-auto rounded-2xl bg-black/20 p-1">
+        <div className="grid min-w-max grid-cols-5 gap-2">
+          {tabItems.map((item) => (
+            <button key={item} type="button" onClick={() => setTab(item)} className={clsx("rounded-xl px-3 py-3 text-xs font-medium capitalize transition", tab === item ? "bg-white text-slate-900" : "text-slate-400")}>
+              {item}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {panelError && <div className="mb-4 rounded-2xl border border-rose-400/20 bg-rose-400/10 px-4 py-3 text-sm text-rose-100">{panelError}</div>}
+
+      {loadingDetails ? (
+        <EmptyPanel title="Loading repository details" body="Fetching status, files, diff, commit log, and branch data." />
+      ) : tab === "status" ? (
+        <div className={clsx("space-y-4", compactLandscape && "grid grid-cols-[42%_58%] gap-4 space-y-0")}>
+          <div className="space-y-4">
+            {status?.entries.length ? (
+              sections.map((section) => {
+                const items = status.entries.filter((entry) => entry.section === section);
+                if (!items.length) {
+                  return null;
+                }
+                return (
+                  <section key={section}>
+                    <div className="mb-2 flex items-center justify-between">
+                      <h3 className="text-sm font-medium capitalize text-white">{section}</h3>
+                      <span className="rounded-full bg-black/20 px-2.5 py-1 text-[11px] text-slate-400">{items.length}</span>
+                    </div>
+                    <StatusSectionList
+                      items={items}
+                      diffs={diffs}
+                      onOpen={(entry, diff) => {
+                        if (diff) {
+                          openWorkingDiff(entry.path);
+                          return;
+                        }
+                        void loadFileContent(entry.path);
+                      }}
+                    />
+                  </section>
+                );
+              })
+            ) : (
+              <EmptyPanel title="Working tree is clean" body="This repository has no staged, unstaged, untracked, or conflicted files." />
+            )}
+          </div>
+          {viewer && !compactPortrait && <ViewerPanel viewer={viewer} diffMode={diffMode} />}
+        </div>
+      ) : tab === "files" ? (
+        <div className={clsx("space-y-4", compactLandscape && "grid grid-cols-[40%_60%] gap-4 space-y-0")}>
+          <RepoFileList
+            files={repoFiles}
+            selectedPath={selectedRepoFilePath}
+            onSelect={(path) => {
+              setSelectedRepoFilePath(path);
+              void openRepoFile(path);
+            }}
+            heightClass={compactLandscape ? "max-h-[68vh]" : "max-h-[45vh]"}
+          />
+          {viewer && viewer.kind === "content" ? <ViewerPanel viewer={viewer} diffMode={diffMode} /> : <EmptyPanel title="Select a file" body="Code files render with syntax colors and images open inline." />}
+        </div>
+      ) : tab === "diff" ? (
+        <div className="space-y-3">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <p className="text-sm font-medium text-white">Diff Viewer</p>
+              <p className="text-xs text-slate-400">Default file action is diff when patch data exists.</p>
+            </div>
+            <div className="flex items-center gap-2">
+              {previousTab && previousTab !== "diff" && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setTab(previousTab);
+                    setPreviousTab(null);
+                    setMobileDiffOpen(false);
+                  }}
+                  className="rounded-xl border border-white/10 px-3 py-2 text-xs text-slate-200"
+                >
+                  Back to {previousTab}
+                </button>
+              )}
+              <div className="grid grid-cols-2 gap-2 rounded-2xl bg-black/20 p-1">
+                {(["inline", "split"] as const).map((mode) => (
+                  <button key={mode} type="button" onClick={() => setDiffMode(mode)} className={clsx("rounded-xl px-3 py-2 text-xs font-medium capitalize", diffMode === mode ? "bg-white text-slate-900" : "text-slate-400")}>
+                    {mode}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          {selectedDiff ? (
+            <div className={clsx("gap-3", compactLandscape ? "grid grid-cols-[36%_64%]" : "block")}>
+              {!compactLandscape && (
+                <div className={clsx(mobileDiffOpen && "hidden")}>
+                  <DiffFileList
+                    diffs={diffs}
+                    selectedPath={selectedDiff.path}
+                    onSelect={(path) => {
+                      setSelectedDiffPath(path);
+                      setMobileDiffOpen(true);
+                    }}
+                  />
+                </div>
+              )}
+              {compactLandscape && <DiffFileList diffs={diffs} selectedPath={selectedDiff.path} onSelect={setSelectedDiffPath} heightClass="max-h-[55vh]" dense />}
+              <DiffCanvas
+                diff={selectedDiff}
+                diffMode={diffMode}
+                onBack={compactPortrait ? () => setMobileDiffOpen(false) : undefined}
+                onPrevious={selectedDiffIndex > 0 ? () => selectDiffAt(selectedDiffIndex - 1) : undefined}
+                onNext={selectedDiffIndex >= 0 && selectedDiffIndex < diffs.length - 1 ? () => selectDiffAt(selectedDiffIndex + 1) : undefined}
+                className={clsx(compactPortrait && !mobileDiffOpen && "hidden", compactLandscape && "min-h-[60vh]")}
+              />
+            </div>
+          ) : (
+            <EmptyPanel title="No diff output" body="Select a repo with working tree changes to inspect file-by-file patches here." />
+          )}
+        </div>
+      ) : tab === "commits" ? (
+        <div className="space-y-4">
+          <div className="space-y-2">
+            {commits.map((commit) => (
+              <button
+                key={commit.hash}
+                type="button"
+                onClick={() => {
+                  setSelectedCommitHash(commit.hash);
+                  setViewer(null);
+                }}
+                className={clsx("w-full rounded-2xl border px-3 py-3 text-left transition", selectedCommitHash === commit.hash ? "border-cyan-400/40 bg-cyan-400/10" : "border-white/10 bg-black/20")}
+              >
+                <p className="text-sm text-white">{commit.message}</p>
+                <p className="mt-1 font-mono text-xs text-slate-400">{commit.hash.slice(0, 7)}</p>
+                <p className="mt-2 text-xs text-slate-500">
+                  {commit.author} • {commit.date}
+                </p>
+              </button>
+            ))}
+          </div>
+
+          {selectedCommit && (
+            <section className="rounded-2xl border border-white/10 bg-black/20 p-3">
+              <div className="mb-3">
+                <p className="text-sm font-medium text-white">Changed Files</p>
+                <p className="mt-1 text-xs text-slate-400">{selectedCommit.hash.slice(0, 7)}</p>
+              </div>
+              {commitFiles.length > 0 ? (
+                <div className="space-y-1.5">
+                  {commitFiles.map((file) => (
+                    <button
+                      key={file.path}
+                      type="button"
+                      onClick={() => {
+                        setSelectedCommitFilePath(file.path);
+                        void openCommitFile(file);
+                      }}
+                      className={clsx("w-full rounded-xl border px-2.5 py-2 text-left transition", selectedCommitFilePath === file.path ? "border-cyan-400/40 bg-cyan-400/10" : "border-white/10 bg-white/5")}
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <p className="truncate text-[13px] text-white">{file.path}</p>
+                          <p className="mt-0.5 text-[11px] text-slate-400">
+                            <span className="text-lime-300">+{file.additions}</span> / <span className="text-rose-300">-{file.deletions}</span>
+                          </p>
+                        </div>
+                        <span className="shrink-0 rounded-full border border-white/10 px-2 py-0.5 text-[10px] text-slate-300">Open</span>
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              ) : (
+                <EmptyPanel title="No files" body="This commit has no changed files available to preview." />
+              )}
+            </section>
+          )}
+
+          {viewer ? <ViewerPanel viewer={viewer} diffMode={diffMode} /> : <EmptyPanel title="Select a changed file" body="Diff opens first. If a file has no patch output, GitPocket falls back to file content." />}
+        </div>
+      ) : branches.length > 0 ? (
+        <div className={clsx("space-y-2", compactLandscape && "grid grid-cols-2 gap-2 space-y-0")}>
+          {branches.map((branch) => (
+            <div key={branch.name} className="flex items-center justify-between gap-3 rounded-2xl bg-black/20 px-3 py-3">
+              <div className="min-w-0">
+                <p className="truncate text-sm text-white">{branch.name}</p>
+                <p className="mt-1 font-mono text-xs text-slate-500">{branch.commit.slice(0, 7)}</p>
+              </div>
+              {branch.current && <span className="shrink-0 rounded-full border border-cyan-400/40 bg-cyan-400/10 px-2 py-1 text-[11px] text-cyan-200">current</span>}
+            </div>
+          ))}
+        </div>
+      ) : (
+        <EmptyPanel title="No branches loaded" body="Branch metadata will appear here for the selected repository." />
+      )}
+    </main>
+  );
+}
+
+function DesktopWorkspace({
+  activeProject,
+  status,
+  diffs,
+  selectedDiff,
+  setSelectedDiffPath,
+  repoFiles,
+  selectedRepoFilePath,
+  setSelectedRepoFilePath,
+  commits,
+  selectedCommit,
+  selectedCommitHash,
+  commitFiles,
+  selectedCommitFilePath,
+  setSelectedCommitFilePath,
+  setSelectedCommitHash,
+  setViewer,
+  viewer,
+  branches,
+  tab,
+  setTab,
+  diffMode,
+  setDiffMode,
+  panelError,
+  loadingDetails,
+  sections,
+  openWorkingDiff,
+  loadFileContent,
+  openCommitFile,
+  openRepoFile
+}: WorkspaceProps) {
+  if (!activeProject) {
+    return <EmptyPanel title="No active repository" body="Pick a saved project from the workspace menu." />;
+  }
+
+  return (
+    <main className="rounded-[28px] border border-white/10 bg-white/5 p-4 shadow-panel backdrop-blur">
+      <div className="mb-4 flex items-center justify-between gap-4">
+        <div className="overflow-x-auto rounded-2xl bg-black/20 p-1">
+          <div className="grid min-w-max grid-cols-5 gap-2">
+            {tabItems.map((item) => (
+              <button key={item} type="button" onClick={() => setTab(item)} className={clsx("rounded-xl px-4 py-3 text-sm font-medium capitalize transition", tab === item ? "bg-white text-slate-900" : "text-slate-400")}>
+                {item}
+              </button>
+            ))}
+          </div>
+        </div>
+        <div className="rounded-2xl border border-white/10 bg-black/20 px-4 py-3 text-right">
+          <p className="text-[11px] uppercase tracking-[0.18em] text-slate-500">Active Repo</p>
+          <p className="mt-1 text-sm text-white">{activeProject.name}</p>
+          <p className="mt-1 font-mono text-[11px] text-slate-400">{activeProject.branch}</p>
+        </div>
+      </div>
+
+      {panelError && <div className="mb-4 rounded-2xl border border-rose-400/20 bg-rose-400/10 px-4 py-3 text-sm text-rose-100">{panelError}</div>}
+
+      {loadingDetails ? (
+        <EmptyPanel title="Loading repository details" body="Fetching status, files, diff, commit log, and branch data." />
+      ) : tab === "status" ? (
+        <div className="grid gap-4 xl:grid-cols-[minmax(0,1.2fr)_minmax(340px,0.8fr)]">
+          <div className="space-y-4">
+            {status?.entries.length ? (
+              sections.map((section) => {
+                const items = status.entries.filter((entry) => entry.section === section);
+                if (!items.length) {
+                  return null;
+                }
+                return (
+                  <section key={section} className="rounded-2xl border border-white/10 bg-black/20 p-4">
+                    <div className="mb-3 flex items-center justify-between">
+                      <h3 className="text-sm font-medium capitalize text-white">{section}</h3>
+                      <span className="rounded-full bg-black/20 px-2.5 py-1 text-[11px] text-slate-400">{items.length}</span>
+                    </div>
+                    <StatusSectionList
+                      items={items}
+                      diffs={diffs}
+                      onOpen={(entry, diff) => {
+                        if (diff) {
+                          openWorkingDiff(entry.path);
+                          return;
+                        }
+                        void loadFileContent(entry.path);
+                      }}
+                    />
+                  </section>
+                );
+              })
+            ) : (
+              <EmptyPanel title="Working tree is clean" body="This repository has no staged, unstaged, untracked, or conflicted files." />
+            )}
+          </div>
+          {viewer ? <ViewerPanel viewer={viewer} diffMode={diffMode} /> : <EmptyPanel title="Select a file" body="Changed files open in diff first. Files without patch output fall back to content preview." />}
+        </div>
+      ) : tab === "files" ? (
+        <div className="grid gap-3 xl:grid-cols-[360px_minmax(0,1fr)]">
+          <RepoFileList
+            files={repoFiles}
+            selectedPath={selectedRepoFilePath}
+            onSelect={(path) => {
+              setSelectedRepoFilePath(path);
+              void openRepoFile(path);
+            }}
+            heightClass="max-h-[calc(100vh-20rem)]"
+            dense
+            grouped
+          />
+          {viewer && viewer.kind === "content" ? <ViewerPanel viewer={viewer} diffMode={diffMode} /> : <EmptyPanel title="Select a repo file" body="Code files render with syntax highlighting and images preview inline." />}
+        </div>
+      ) : tab === "diff" ? (
+        selectedDiff ? (
+          <section className="rounded-[24px] border border-white/10 bg-black/20 p-3">
+            <div className="mb-3 flex items-center justify-between gap-4 rounded-2xl border border-white/10 bg-black/30 px-4 py-3">
+              <div>
+                <p className="text-sm font-medium text-white">Diff Explorer</p>
+                <p className="mt-1 text-xs text-slate-400">Pinned file list on the left, wider diff canvas on the right.</p>
+              </div>
+              <div className="grid grid-cols-2 gap-2 rounded-2xl bg-black/20 p-1">
+                {(["inline", "split"] as const).map((mode) => (
+                  <button key={mode} type="button" onClick={() => setDiffMode(mode)} className={clsx("rounded-xl px-4 py-2 text-xs font-medium capitalize", diffMode === mode ? "bg-white text-slate-900" : "text-slate-400")}>
+                    {mode}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div className="grid gap-3 xl:grid-cols-[320px_minmax(0,1fr)]">
+              <DiffFileList diffs={diffs} selectedPath={selectedDiff.path} onSelect={setSelectedDiffPath} heightClass="max-h-[calc(100vh-20rem)]" dense grouped />
+              <DiffCanvas diff={selectedDiff} diffMode={diffMode} className="min-h-[70vh]" />
+            </div>
+          </section>
+        ) : (
+          <EmptyPanel title="No diff output" body="Select a repo with working tree changes to inspect file-by-file patches here." />
+        )
+      ) : tab === "commits" ? (
+        <div className="grid gap-4 xl:grid-cols-[340px_340px_minmax(0,1fr)]">
+          <div className="space-y-2">
+            {commits.map((commit) => (
+              <button
+                key={commit.hash}
+                type="button"
+                onClick={() => {
+                  setSelectedCommitHash(commit.hash);
+                  setViewer(null);
+                }}
+                className={clsx("w-full rounded-2xl border px-3 py-3 text-left transition", selectedCommitHash === commit.hash ? "border-cyan-400/40 bg-cyan-400/10" : "border-white/10 bg-black/20")}
+              >
+                <p className="text-sm text-white">{commit.message}</p>
+                <p className="mt-1 font-mono text-xs text-slate-400">{commit.hash.slice(0, 7)}</p>
+                <p className="mt-2 text-xs text-slate-500">
+                  {commit.author} • {commit.date}
+                </p>
+              </button>
+            ))}
+          </div>
+
+          <section className="rounded-2xl border border-white/10 bg-black/20 p-3">
+            <div className="mb-3">
+              <p className="text-sm font-medium text-white">Files</p>
+              <p className="mt-1 text-xs text-slate-400">{selectedCommit ? selectedCommit.hash.slice(0, 7) : "Select a commit"}</p>
+            </div>
+            {selectedCommit && commitFiles.length > 0 ? (
+              <div className="space-y-1.5">
+                {commitFiles.map((file) => (
+                  <button
+                    key={file.path}
+                    type="button"
+                    onClick={() => {
+                      setSelectedCommitFilePath(file.path);
+                      void openCommitFile(file);
+                    }}
+                    className={clsx("w-full rounded-xl border px-2.5 py-2 text-left transition", selectedCommitFilePath === file.path ? "border-cyan-400/40 bg-cyan-400/10" : "border-white/10 bg-white/5")}
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <p className="truncate text-[13px] text-white">{file.path}</p>
+                        <p className="mt-0.5 text-[11px] text-slate-400">
+                          <span className="text-lime-300">+{file.additions}</span> / <span className="text-rose-300">-{file.deletions}</span>
+                        </p>
+                      </div>
+                      <span className="shrink-0 rounded-full border border-white/10 px-2 py-0.5 text-[10px] text-slate-300">Open</span>
+                    </div>
+                  </button>
+                ))}
+              </div>
+            ) : (
+              <EmptyPanel title="No files" body="This commit has no changed files available to preview." />
+            )}
+          </section>
+
+          {viewer ? <ViewerPanel viewer={viewer} diffMode={diffMode} /> : <EmptyPanel title="Select a changed file" body="Desktop commit view is now three columns: commits, files, and preview." />}
+        </div>
+      ) : branches.length > 0 ? (
+        <div className="grid gap-3 xl:grid-cols-2 2xl:grid-cols-3">
+          {branches.map((branch) => (
+            <div key={branch.name} className="flex items-center justify-between gap-3 rounded-2xl border border-white/10 bg-black/20 px-4 py-4">
+              <div className="min-w-0">
+                <p className="truncate text-sm text-white">{branch.name}</p>
+                <p className="mt-1 font-mono text-xs text-slate-500">{branch.commit.slice(0, 7)}</p>
+              </div>
+              {branch.current && <span className="shrink-0 rounded-full border border-cyan-400/40 bg-cyan-400/10 px-2 py-1 text-[11px] text-cyan-200">current</span>}
+            </div>
+          ))}
+        </div>
+      ) : (
+        <EmptyPanel title="No branches loaded" body="Branch metadata will appear here for the selected repository." />
+      )}
+    </main>
+  );
+}
+
 export function App() {
   const [projects, setProjects] = useState<ProjectRecord[]>([]);
   const [activeProjectId, setActiveProjectId] = useState<string | null>(null);
   const [status, setStatus] = useState<ProjectStatus | null>(null);
   const [diffs, setDiffs] = useState<FileDiff[]>([]);
   const [selectedDiffPath, setSelectedDiffPath] = useState<string | null>(null);
+  const [repoFiles, setRepoFiles] = useState<RepoFileEntry[]>([]);
+  const [selectedRepoFilePath, setSelectedRepoFilePath] = useState<string | null>(null);
   const [commits, setCommits] = useState<CommitRecord[]>([]);
   const [selectedCommitHash, setSelectedCommitHash] = useState<string | null>(null);
   const [commitFiles, setCommitFiles] = useState<FileDiff[]>([]);
   const [selectedCommitFilePath, setSelectedCommitFilePath] = useState<string | null>(null);
   const [branches, setBranches] = useState<BranchRecord[]>([]);
-  const [tab, setTab] = useState<(typeof tabItems)[number]>("diff");
-  const [previousTab, setPreviousTab] = useState<(typeof tabItems)[number] | null>(null);
+  const [tab, setTab] = useState<AppTab>("diff");
+  const [previousTab, setPreviousTab] = useState<AppTab | null>(null);
   const [diffMode, setDiffMode] = useState<DiffMode>("inline");
   const [form, setForm] = useState({ name: "", path: "" });
   const [roots, setRoots] = useState<DirectoryRoot[]>([]);
@@ -502,7 +1296,16 @@ export function App() {
         const projectData = await safeFetch<ProjectResponse>("/api/projects");
         if (!cancelled) {
           setProjects(projectData.items);
-          setActiveProjectId((current) => current ?? projectData.items[0]?.id ?? null);
+          setActiveProjectId((current) => {
+            const stored = window.localStorage.getItem(ACTIVE_PROJECT_STORAGE_KEY);
+            if (current && projectData.items.some((item) => item.id === current)) {
+              return current;
+            }
+            if (stored && projectData.items.some((item) => item.id === stored)) {
+              return stored;
+            }
+            return projectData.items[0]?.id ?? null;
+          });
         }
       } catch (error) {
         if (!cancelled) {
@@ -547,17 +1350,24 @@ export function App() {
   }, []);
 
   useEffect(() => {
+    if (activeProjectId) {
+      window.localStorage.setItem(ACTIVE_PROJECT_STORAGE_KEY, activeProjectId);
+    }
+  }, [activeProjectId]);
+
+  useEffect(() => {
     let cancelled = false;
 
     async function loadProjectDetails(projectId: string) {
       setLoadingDetails(true);
       setPanelError(null);
       try {
-        const [nextStatus, nextDiffs, nextCommits, nextBranches] = await Promise.all([
+        const [nextStatus, nextDiffs, nextCommits, nextBranches, nextFiles] = await Promise.all([
           safeFetch<ProjectStatus>(`/api/projects/${projectId}/status`),
           safeFetch<DiffResponse>(`/api/projects/${projectId}/diff`),
           safeFetch<CommitResponse>(`/api/projects/${projectId}/log`),
-          safeFetch<BranchResponse>(`/api/projects/${projectId}/branches`)
+          safeFetch<BranchResponse>(`/api/projects/${projectId}/branches`),
+          safeFetch<RepoFilesResponse>(`/api/projects/${projectId}/files`)
         ]);
 
         if (cancelled) {
@@ -566,9 +1376,9 @@ export function App() {
 
         setStatus(nextStatus);
         setDiffs(nextDiffs.items);
-        setSelectedDiffPath((current) =>
-          current && nextDiffs.items.some((item) => item.path === current) ? current : (nextDiffs.items[0]?.path ?? null)
-        );
+        setSelectedDiffPath((current) => (current && nextDiffs.items.some((item) => item.path === current) ? current : nextDiffs.items[0]?.path ?? null));
+        setRepoFiles(nextFiles.items);
+        setSelectedRepoFilePath((current) => (current && nextFiles.items.some((item) => item.path === current) ? current : nextFiles.items[0]?.path ?? null));
         setCommits(nextCommits.items);
         setSelectedCommitHash((current) => (current && nextCommits.items.some((item) => item.hash === current) ? current : nextCommits.items[0]?.hash ?? null));
         setBranches(nextBranches.items);
@@ -576,13 +1386,14 @@ export function App() {
         setCommitFiles([]);
         setSelectedCommitFilePath(null);
         setMobileDiffOpen(false);
-        setPanelError(null);
       } catch (error) {
         if (!cancelled) {
           setPanelError(error instanceof Error ? error.message : "Failed to load project");
           setStatus(null);
           setDiffs([]);
           setSelectedDiffPath(null);
+          setRepoFiles([]);
+          setSelectedRepoFilePath(null);
           setCommits([]);
           setSelectedCommitHash(null);
           setCommitFiles([]);
@@ -602,6 +1413,8 @@ export function App() {
       setStatus(null);
       setDiffs([]);
       setSelectedDiffPath(null);
+      setRepoFiles([]);
+      setSelectedRepoFilePath(null);
       setCommits([]);
       setSelectedCommitHash(null);
       setCommitFiles([]);
@@ -628,18 +1441,15 @@ export function App() {
     async function loadFiles() {
       if (!activeProjectId || !selectedCommitHash) {
         setCommitFiles([]);
+        setSelectedCommitFilePath(null);
         return;
       }
 
       try {
-        const data = await safeFetch<CommitFilesResponse>(
-          `/api/projects/${activeProjectId}/commit-files?commit=${encodeURIComponent(selectedCommitHash)}`
-        );
+        const data = await safeFetch<CommitFilesResponse>(`/api/projects/${activeProjectId}/commit-files?commit=${encodeURIComponent(selectedCommitHash)}`);
         if (!cancelled) {
           setCommitFiles(data.items);
-          setSelectedCommitFilePath((current) =>
-            current && data.items.some((item) => item.path === current) ? current : (data.items[0]?.path ?? null)
-          );
+          setSelectedCommitFilePath((current) => (current && data.items.some((item) => item.path === current) ? current : data.items[0]?.path ?? null));
         }
       } catch (error) {
         if (!cancelled) {
@@ -686,6 +1496,9 @@ export function App() {
       path: data.path,
       ref: data.ref,
       content: data.content,
+      contentKind: data.kind,
+      mimeType: data.mimeType,
+      encoding: data.encoding,
       tooLarge: data.tooLarge
     });
   }
@@ -699,15 +1512,32 @@ export function App() {
     setSelectedDiffPath(path);
     setTab("diff");
     setMobileDiffOpen(true);
-  }
-
-  function openCommitDiff(file: FileDiff) {
     setViewer({
       kind: "diff",
-      path: file.path,
-      patch: file.patch,
-      tooLarge: file.tooLarge
+      path: diff.path,
+      patch: diff.patch,
+      tooLarge: diff.tooLarge
     });
+  }
+
+  async function openCommitFile(file: FileDiff) {
+    setViewer(null);
+    if (file.patch || file.tooLarge) {
+      setViewer({
+        kind: "diff",
+        path: file.path,
+        patch: file.patch,
+        tooLarge: file.tooLarge
+      });
+      return;
+    }
+    if (selectedCommitHash) {
+      await loadFileContent(file.path, selectedCommitHash);
+    }
+  }
+
+  async function openRepoFile(path: string) {
+    await loadFileContent(path);
   }
 
   async function addProject(event: FormEvent<HTMLFormElement>) {
@@ -726,6 +1556,7 @@ export function App() {
       const project = (await response.json()) as ProjectRecord;
       setProjects((current) => [project, ...current.filter((item) => item.id !== project.id)]);
       setActiveProjectId(project.id);
+      window.localStorage.setItem(ACTIVE_PROJECT_STORAGE_KEY, project.id);
       setForm({ name: "", path: "" });
       setBootError(null);
       setWorkspaceMenuOpen(false);
@@ -747,11 +1578,11 @@ export function App() {
               Remote Git Workspace
             </div>
             <h1 className={clsx("mt-3 font-display font-semibold tracking-tight text-white", mobile ? "text-2xl" : "text-3xl xl:text-4xl")}>GitPocket</h1>
-            {!mobile && <p className="mt-2 max-w-xl text-sm leading-6 text-slate-300">Observe remote repos, inspect diffs, and track AI-driven code changes from phone or desktop.</p>}
+            {!mobile && <p className="mt-2 max-w-xl text-sm leading-6 text-slate-300">Observe remote repos, inspect diffs, files, and commit history from phone or desktop.</p>}
           </div>
           <button type="button" onClick={() => setWorkspaceMenuOpen(true)} className={clsx("border border-cyan-400/20 bg-cyan-400/10 text-left", mobile ? "rounded-2xl px-4 py-3" : "rounded-xl px-3 py-2")}>
             <p className="text-[11px] uppercase tracking-[0.2em] text-cyan-200">Workspace</p>
-            <p className={clsx("font-medium text-white", mobile ? "mt-2 text-sm" : "mt-1 text-xs")}>Projects</p>
+            <p className={clsx("font-medium text-white", mobile ? "mt-2 text-sm" : "mt-1 text-xs")}>{activeProject?.name ?? "Projects"}</p>
           </button>
         </header>
 
@@ -762,8 +1593,8 @@ export function App() {
               <p className="mt-2 text-xl font-semibold text-white">{projects.length}</p>
             </div>
             <div className="rounded-xl border border-white/10 bg-white/5 px-4 py-3">
-              <p className="text-[11px] uppercase tracking-[0.2em] text-slate-500">Staged</p>
-              <p className="mt-2 text-xl font-semibold text-lime-300">{countBySection(status, "staged")}</p>
+              <p className="text-[11px] uppercase tracking-[0.2em] text-slate-500">Files</p>
+              <p className="mt-2 text-xl font-semibold text-white">{repoFiles.length}</p>
             </div>
             <div className="rounded-xl border border-white/10 bg-white/5 px-4 py-3">
               <p className="text-[11px] uppercase tracking-[0.2em] text-slate-500">Unstaged</p>
@@ -897,7 +1728,7 @@ export function App() {
                 <div className="mb-4 flex items-center justify-between">
                   <div>
                     <p className="text-xs uppercase tracking-[0.2em] text-slate-400">Projects</p>
-                    <p className="mt-1 text-sm text-slate-300">Saved on the server, not just in this browser.</p>
+                    <p className="mt-1 text-sm text-slate-300">Saved on the server, current selection remembered locally.</p>
                   </div>
                   <div className="rounded-full border border-white/10 bg-black/20 px-2.5 py-1 text-[11px] text-slate-300">{projects.length} repos</div>
                 </div>
@@ -914,6 +1745,7 @@ export function App() {
                         type="button"
                         onClick={() => {
                           setActiveProjectId(project.id);
+                          window.localStorage.setItem(ACTIVE_PROJECT_STORAGE_KEY, project.id);
                           setWorkspaceMenuOpen(false);
                         }}
                         className={clsx("w-full rounded-2xl border p-3 text-left transition", activeProjectId === project.id ? "border-signal-cyan/60 bg-signal-cyan/10" : "border-white/10 bg-black/20")}
@@ -943,6 +1775,9 @@ export function App() {
             diffs={diffs}
             selectedDiff={selectedDiff}
             setSelectedDiffPath={setSelectedDiffPath}
+            repoFiles={repoFiles}
+            selectedRepoFilePath={selectedRepoFilePath}
+            setSelectedRepoFilePath={setSelectedRepoFilePath}
             commits={commits}
             selectedCommit={selectedCommit}
             selectedCommitHash={selectedCommitHash}
@@ -968,7 +1803,8 @@ export function App() {
             sections={sectionOrder}
             openWorkingDiff={openWorkingDiff}
             loadFileContent={loadFileContent}
-            openCommitDiff={openCommitDiff}
+            openCommitFile={openCommitFile}
+            openRepoFile={openRepoFile}
           />
         ) : (
           <DesktopWorkspace
@@ -977,13 +1813,18 @@ export function App() {
             diffs={diffs}
             selectedDiff={selectedDiff}
             setSelectedDiffPath={setSelectedDiffPath}
+            repoFiles={repoFiles}
+            selectedRepoFilePath={selectedRepoFilePath}
+            setSelectedRepoFilePath={setSelectedRepoFilePath}
             commits={commits}
             selectedCommit={selectedCommit}
             selectedCommitHash={selectedCommitHash}
-            setSelectedCommitHash={setSelectedCommitHash}
             commitFiles={commitFiles}
             selectedCommitFilePath={selectedCommitFilePath}
             setSelectedCommitFilePath={setSelectedCommitFilePath}
+            setSelectedCommitHash={setSelectedCommitHash}
+            setViewer={setViewer}
+            viewer={viewer}
             branches={branches}
             compactPortrait={false}
             compactLandscape={false}
@@ -998,566 +1839,14 @@ export function App() {
             panelError={panelError}
             loadingDetails={loadingDetails}
             sections={sectionOrder}
-            viewer={viewer}
-            setViewer={setViewer}
             openWorkingDiff={openWorkingDiff}
             loadFileContent={loadFileContent}
-            openCommitDiff={openCommitDiff}
+            openCommitFile={openCommitFile}
+            openRepoFile={openRepoFile}
           />
         )}
       </div>
       {viewer && compactPortrait && <FullscreenViewer viewer={viewer} diffMode={diffMode} onClose={() => setViewer(null)} />}
     </div>
-  );
-}
-
-function MobileWorkspace({
-  activeProject,
-  status,
-  diffs,
-  selectedDiff,
-  setSelectedDiffPath,
-  commits,
-  selectedCommit,
-  selectedCommitHash,
-  commitFiles,
-  selectedCommitFilePath,
-  setSelectedCommitFilePath,
-  setSelectedCommitHash,
-  setViewer,
-  viewer,
-  branches,
-  compactPortrait,
-  compactLandscape,
-  mobileDiffOpen,
-  setMobileDiffOpen,
-  tab,
-  setTab,
-  previousTab,
-  setPreviousTab,
-  diffMode,
-  setDiffMode,
-  panelError,
-  loadingDetails,
-  sections,
-  openWorkingDiff,
-  loadFileContent,
-  openCommitDiff
-}: {
-  activeProject: ProjectRecord | null;
-  status: ProjectStatus | null;
-  diffs: FileDiff[];
-  selectedDiff: FileDiff | null;
-  setSelectedDiffPath: (path: string) => void;
-  commits: CommitRecord[];
-  selectedCommit: CommitRecord | null;
-  selectedCommitHash: string | null;
-  commitFiles: FileDiff[];
-  selectedCommitFilePath: string | null;
-  setSelectedCommitFilePath: (path: string | null) => void;
-  setSelectedCommitHash: (hash: string) => void;
-  setViewer: (viewer: Viewer | null) => void;
-  viewer: Viewer | null;
-  branches: BranchRecord[];
-  compactPortrait: boolean;
-  compactLandscape: boolean;
-  mobileDiffOpen: boolean;
-  setMobileDiffOpen: (value: boolean) => void;
-  tab: (typeof tabItems)[number];
-  setTab: (tab: (typeof tabItems)[number]) => void;
-  previousTab: (typeof tabItems)[number] | null;
-  setPreviousTab: (tab: (typeof tabItems)[number] | null) => void;
-  diffMode: DiffMode;
-  setDiffMode: (mode: DiffMode) => void;
-  panelError: string | null;
-  loadingDetails: boolean;
-  sections: ProjectStatusSection[];
-  openWorkingDiff: (path: string) => void;
-  loadFileContent: (path: string, ref?: string | null) => Promise<void>;
-  openCommitDiff: (file: FileDiff) => void;
-}) {
-  const selectedDiffIndex = selectedDiff ? diffs.findIndex((diff) => diff.path === selectedDiff.path) : -1;
-
-  function selectDiffAt(index: number) {
-    const nextDiff = diffs[index];
-    if (!nextDiff) {
-      return;
-    }
-    setSelectedDiffPath(nextDiff.path);
-    setMobileDiffOpen(true);
-  }
-
-  if (!activeProject) {
-    return <EmptyPanel title="No active repository" body="Pick a saved project from the workspace menu." />;
-  }
-
-  return (
-    <main className="rounded-3xl border border-white/10 bg-white/5 p-3 shadow-panel backdrop-blur">
-      <div className="mb-3 overflow-x-auto rounded-2xl bg-black/20 p-1">
-        <div className="grid min-w-max grid-cols-4 gap-2">
-          {tabItems.map((item) => (
-            <button key={item} type="button" onClick={() => setTab(item)} className={clsx("rounded-xl px-3 py-3 text-xs font-medium capitalize transition", tab === item ? "bg-white text-slate-900" : "text-slate-400")}>
-              {item}
-            </button>
-          ))}
-        </div>
-      </div>
-
-      {panelError && <div className="mb-4 rounded-2xl border border-rose-400/20 bg-rose-400/10 px-4 py-3 text-sm text-rose-100">{panelError}</div>}
-      {loadingDetails ? (
-        <EmptyPanel title="Loading repository details" body="Fetching status, diff, commit log, and branch data." />
-      ) : tab === "status" ? (
-        <div className={clsx("space-y-4", compactLandscape && "grid grid-cols-[42%_58%] gap-4 space-y-0")}>
-          <div className="space-y-4">
-          {status?.entries.length ? (
-            sections.map((section) => {
-              const items = status.entries.filter((entry) => entry.section === section);
-              if (!items.length) {
-                return null;
-              }
-              return (
-                <section key={section}>
-                  <div className="mb-2 flex items-center justify-between">
-                    <h3 className="text-sm font-medium capitalize text-white">{section}</h3>
-                    <span className="rounded-full bg-black/20 px-2.5 py-1 text-[11px] text-slate-400">{items.length}</span>
-                  </div>
-                  <div className="space-y-2">
-                    {items.map((entry: StatusEntry) => {
-                      const diff = diffs.find((item) => item.path === entry.path);
-                      return (
-                        <div key={`${entry.section}-${entry.path}`} className="rounded-2xl bg-black/20 px-3 py-3">
-                          <div className="flex items-center justify-between gap-3">
-                            <div className="min-w-0">
-                              <div className="flex items-center gap-3">
-                                <span className="w-8 font-mono text-sm text-signal-lime">{entry.code}</span>
-                                <p className="truncate text-sm text-white">{entry.path}</p>
-                              </div>
-                              <p className="mt-1 text-xs uppercase tracking-[0.12em] text-slate-500">{entry.section}</p>
-                            </div>
-                            <div className="flex shrink-0 gap-2">
-                              {diff && (
-                                <button
-                                  type="button"
-                                  onClick={() => openWorkingDiff(entry.path)}
-                                  className="rounded-full border border-white/10 px-2.5 py-1 text-[11px] text-slate-300"
-                                >
-                                  Diff
-                                </button>
-                              )}
-                              <button type="button" onClick={() => void loadFileContent(entry.path)} className="rounded-full border border-white/10 px-2.5 py-1 text-[11px] text-slate-300">
-                                Content
-                              </button>
-                            </div>
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                </section>
-              );
-            })
-          ) : (
-            <EmptyPanel title="Working tree is clean" body="This repository has no staged, unstaged, untracked, or conflicted files." />
-          )}
-          </div>
-          {viewer && !compactPortrait && viewer.kind === "content" && <ViewerPanel viewer={viewer} diffMode={diffMode} />}
-          {viewer && compactPortrait && viewer.kind === "content" && <FullscreenViewer viewer={viewer} diffMode={diffMode} onClose={() => setViewer(null)} />}
-        </div>
-      ) : tab === "diff" ? (
-        <div className="space-y-3">
-          <div className="flex items-center justify-between gap-3">
-            <div>
-              <p className="text-sm font-medium text-white">Diff Viewer</p>
-              <p className="text-xs text-slate-400">Single file first on mobile, wider canvas in landscape.</p>
-            </div>
-            <div className="flex items-center gap-2">
-              {previousTab && previousTab !== "diff" && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    setTab(previousTab);
-                    setPreviousTab(null);
-                    setMobileDiffOpen(false);
-                  }}
-                  className="rounded-xl border border-white/10 px-3 py-2 text-xs text-slate-200"
-                >
-                  Back to {previousTab}
-                </button>
-              )}
-              <div className="grid grid-cols-2 gap-2 rounded-2xl bg-black/20 p-1">
-                {(["inline", "split"] as const).map((mode) => (
-                  <button key={mode} type="button" onClick={() => setDiffMode(mode)} className={clsx("rounded-xl px-3 py-2 text-xs font-medium capitalize", diffMode === mode ? "bg-white text-slate-900" : "text-slate-400")}>
-                    {mode}
-                  </button>
-                ))}
-              </div>
-            </div>
-          </div>
-
-          {selectedDiff ? (
-            <>
-              <div className={clsx("gap-3", compactLandscape ? "grid grid-cols-[36%_64%]" : "block")}>
-                {!compactLandscape && (
-                  <div className={clsx(mobileDiffOpen && "hidden")}>
-                    <DiffFileList
-                      diffs={diffs}
-                      selectedPath={selectedDiff.path}
-                      onSelect={(path) => {
-                        setSelectedDiffPath(path);
-                        setMobileDiffOpen(true);
-                      }}
-                    />
-                  </div>
-                )}
-                {compactLandscape && (
-                  <DiffFileList diffs={diffs} selectedPath={selectedDiff.path} onSelect={setSelectedDiffPath} heightClass="max-h-[55vh]" dense />
-                )}
-
-                <DiffCanvas
-                  diff={selectedDiff}
-                  diffMode={diffMode}
-                  onBack={compactPortrait ? () => setMobileDiffOpen(false) : undefined}
-                  onPrevious={selectedDiffIndex > 0 ? () => selectDiffAt(selectedDiffIndex - 1) : undefined}
-                  onNext={selectedDiffIndex >= 0 && selectedDiffIndex < diffs.length - 1 ? () => selectDiffAt(selectedDiffIndex + 1) : undefined}
-                  className={clsx(compactPortrait && !mobileDiffOpen && "hidden", compactLandscape && "min-h-[60vh]")}
-                />
-              </div>
-            </>
-          ) : (
-            <EmptyPanel title="No diff output" body="Select a repo with working tree changes to inspect file-by-file patches here." />
-          )}
-          {viewer && viewer.kind === "content" && <FullscreenViewer viewer={viewer} diffMode={diffMode} onClose={() => setViewer(null)} />}
-        </div>
-      ) : tab === "commits" ? (
-        <div className={clsx("space-y-4", compactLandscape && "grid grid-cols-[40%_60%] gap-4 space-y-0")}>
-          <div className="space-y-2">
-            {commits.map((commit) => (
-              <button
-                key={commit.hash}
-                type="button"
-                onClick={() => {
-                  setSelectedCommitHash(commit.hash);
-                  setViewer(null);
-                }}
-                className={clsx("w-full rounded-2xl border px-3 py-3 text-left transition", selectedCommitHash === commit.hash ? "border-cyan-400/40 bg-cyan-400/10" : "border-white/10 bg-black/20")}
-              >
-                <p className="text-sm text-white">{commit.message}</p>
-                <p className="mt-1 font-mono text-xs text-slate-400">{commit.hash.slice(0, 7)}</p>
-                <p className="mt-2 text-xs text-slate-500">
-                  {commit.author} • {commit.date}
-                </p>
-              </button>
-            ))}
-          </div>
-
-          <div className="space-y-4">
-          {selectedCommit && (
-            <section className="rounded-2xl border border-white/10 bg-black/20 p-3">
-              <div className="mb-3">
-                <p className="text-sm font-medium text-white">Changed Files</p>
-                <p className="mt-1 text-xs text-slate-400">{selectedCommit.hash.slice(0, 7)}</p>
-              </div>
-              {commitFiles.length > 0 ? (
-                <div className="space-y-2">
-                  {commitFiles.map((file) => (
-                    <div
-                      key={file.path}
-                      className={clsx(
-                        "rounded-xl border px-3 py-3",
-                        selectedCommitFilePath === file.path
-                          ? "border-cyan-400/40 bg-cyan-400/10"
-                          : "border-white/10 bg-white/5"
-                      )}
-                    >
-                      <div className="flex items-start justify-between gap-3">
-                        <div className="min-w-0">
-                          <p className="truncate text-sm text-white">{file.path}</p>
-                          <p className="mt-1 text-xs text-slate-400">
-                            <span className="text-lime-300">+{file.additions}</span> / <span className="text-rose-300">-{file.deletions}</span>
-                          </p>
-                        </div>
-                        <div className="flex shrink-0 gap-2">
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setSelectedCommitFilePath(file.path);
-                              openCommitDiff(file);
-                            }}
-                            className="rounded-full border border-white/10 px-2.5 py-1 text-[11px] text-slate-300"
-                          >
-                            Diff
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setSelectedCommitFilePath(file.path);
-                              void loadFileContent(file.path, selectedCommit.hash);
-                            }}
-                            className="rounded-full border border-white/10 px-2.5 py-1 text-[11px] text-slate-300"
-                          >
-                            Content
-                          </button>
-                        </div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <EmptyPanel title="No files" body="This commit has no changed files available to preview." />
-              )}
-            </section>
-          )}
-
-          {viewer && !compactPortrait && <ViewerPanel viewer={viewer} diffMode={diffMode} />}
-          {viewer && compactPortrait && <FullscreenViewer viewer={viewer} diffMode={diffMode} onClose={() => setViewer(null)} />}
-          </div>
-        </div>
-      ) : branches.length > 0 ? (
-        <div className={clsx("space-y-2", compactLandscape && "grid grid-cols-2 gap-2 space-y-0")}>
-          {branches.map((branch) => (
-            <div key={branch.name} className="flex items-center justify-between gap-3 rounded-2xl bg-black/20 px-3 py-3">
-              <div className="min-w-0">
-                <p className="truncate text-sm text-white">{branch.name}</p>
-                <p className="mt-1 font-mono text-xs text-slate-500">{branch.commit.slice(0, 7)}</p>
-              </div>
-              {branch.current && <span className="shrink-0 rounded-full border border-cyan-400/40 bg-cyan-400/10 px-2 py-1 text-[11px] text-cyan-200">current</span>}
-            </div>
-          ))}
-        </div>
-      ) : (
-        <EmptyPanel title="No branches loaded" body="Branch metadata will appear here for the selected repository." />
-      )}
-    </main>
-  );
-}
-
-function DesktopWorkspace(props: Parameters<typeof MobileWorkspace>[0]) {
-  const {
-    activeProject,
-    status,
-    diffs,
-    selectedDiff,
-    setSelectedDiffPath,
-    commits,
-    selectedCommit,
-    selectedCommitHash,
-    commitFiles,
-    selectedCommitFilePath,
-    setSelectedCommitFilePath,
-    setSelectedCommitHash,
-    setViewer,
-    viewer,
-    branches,
-    tab,
-    setTab,
-    diffMode,
-    setDiffMode,
-    panelError,
-    loadingDetails,
-    sections,
-    openWorkingDiff,
-    loadFileContent,
-    openCommitDiff
-  } = props;
-
-  if (!activeProject) {
-    return <EmptyPanel title="No active repository" body="Pick a saved project from the workspace menu." />;
-  }
-
-  return (
-    <main className="rounded-[28px] border border-white/10 bg-white/5 p-4 shadow-panel backdrop-blur">
-      <div className="mb-4 flex items-center justify-between gap-4">
-        <div className="overflow-x-auto rounded-2xl bg-black/20 p-1">
-          <div className="grid min-w-max grid-cols-4 gap-2">
-            {tabItems.map((item) => (
-              <button key={item} type="button" onClick={() => setTab(item)} className={clsx("rounded-xl px-4 py-3 text-sm font-medium capitalize transition", tab === item ? "bg-white text-slate-900" : "text-slate-400")}>
-                {item}
-              </button>
-            ))}
-          </div>
-        </div>
-        <div className="rounded-2xl border border-white/10 bg-black/20 px-4 py-3 text-right">
-          <p className="text-[11px] uppercase tracking-[0.18em] text-slate-500">Active Repo</p>
-          <p className="mt-1 text-sm text-white">{activeProject.name}</p>
-          <p className="mt-1 font-mono text-[11px] text-slate-400">{activeProject.branch}</p>
-        </div>
-      </div>
-
-      {panelError && <div className="mb-4 rounded-2xl border border-rose-400/20 bg-rose-400/10 px-4 py-3 text-sm text-rose-100">{panelError}</div>}
-
-      {loadingDetails ? (
-        <EmptyPanel title="Loading repository details" body="Fetching status, diff, commit log, and branch data." />
-      ) : tab === "status" ? (
-        <div className="grid gap-4 xl:grid-cols-[minmax(0,1.2fr)_minmax(320px,0.8fr)]">
-          <div className="space-y-4">
-            {status?.entries.length ? (
-              sections.map((section) => {
-                const items = status.entries.filter((entry) => entry.section === section);
-                if (!items.length) {
-                  return null;
-                }
-                return (
-                  <section key={section} className="rounded-2xl border border-white/10 bg-black/20 p-4">
-                    <div className="mb-3 flex items-center justify-between">
-                      <h3 className="text-sm font-medium capitalize text-white">{section}</h3>
-                      <span className="rounded-full bg-black/20 px-2.5 py-1 text-[11px] text-slate-400">{items.length}</span>
-                    </div>
-                    <div className="space-y-2">
-                      {items.map((entry: StatusEntry) => {
-                        const diff = diffs.find((item) => item.path === entry.path);
-                        return (
-                          <div key={`${entry.section}-${entry.path}`} className="rounded-2xl border border-white/10 bg-white/5 px-3 py-3">
-                            <div className="flex items-center justify-between gap-3">
-                              <div className="min-w-0">
-                                <div className="flex items-center gap-3">
-                                  <span className="w-8 font-mono text-sm text-signal-lime">{entry.code}</span>
-                                  <p className="truncate text-sm text-white">{entry.path}</p>
-                                </div>
-                                <p className="mt-1 text-xs uppercase tracking-[0.12em] text-slate-500">{entry.section}</p>
-                              </div>
-                              <div className="flex shrink-0 gap-2">
-                                {diff && (
-                                  <button type="button" onClick={() => openWorkingDiff(entry.path)} className="rounded-full border border-white/10 px-2.5 py-1 text-[11px] text-slate-300">
-                                    Diff
-                                  </button>
-                                )}
-                                <button type="button" onClick={() => void loadFileContent(entry.path)} className="rounded-full border border-white/10 px-2.5 py-1 text-[11px] text-slate-300">
-                                  Content
-                                </button>
-                              </div>
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </section>
-                );
-              })
-            ) : (
-              <EmptyPanel title="Working tree is clean" body="This repository has no staged, unstaged, untracked, or conflicted files." />
-            )}
-          </div>
-          {viewer && <ViewerPanel viewer={viewer} diffMode={diffMode} />}
-        </div>
-      ) : tab === "diff" ? (
-        selectedDiff ? (
-          <section className="rounded-[24px] border border-white/10 bg-black/20 p-3">
-            <div className="mb-3 flex items-center justify-between gap-4 rounded-2xl border border-white/10 bg-black/30 px-4 py-3">
-              <div>
-                <p className="text-sm font-medium text-white">Diff Explorer</p>
-                <p className="mt-1 text-xs text-slate-400">Pinned file list on the left, wider diff canvas on the right.</p>
-              </div>
-              <div className="grid grid-cols-2 gap-2 rounded-2xl bg-black/20 p-1">
-                {(["inline", "split"] as const).map((mode) => (
-                  <button key={mode} type="button" onClick={() => setDiffMode(mode)} className={clsx("rounded-xl px-4 py-2 text-xs font-medium capitalize", diffMode === mode ? "bg-white text-slate-900" : "text-slate-400")}>
-                    {mode}
-                  </button>
-                ))}
-              </div>
-            </div>
-            <div className="grid gap-3 xl:grid-cols-[320px_minmax(0,1fr)]">
-              <DiffFileList diffs={diffs} selectedPath={selectedDiff.path} onSelect={setSelectedDiffPath} heightClass="max-h-[calc(100vh-20rem)]" dense grouped />
-              <DiffCanvas diff={selectedDiff} diffMode={diffMode} className="min-h-[70vh]" />
-            </div>
-          </section>
-        ) : (
-          <EmptyPanel title="No diff output" body="Select a repo with working tree changes to inspect file-by-file patches here." />
-        )
-      ) : tab === "commits" ? (
-        <div className="grid gap-4 xl:grid-cols-[380px_minmax(0,1fr)]">
-          <div className="space-y-2">
-            {commits.map((commit) => (
-              <button
-                key={commit.hash}
-                type="button"
-                onClick={() => {
-                  setSelectedCommitHash(commit.hash);
-                  setViewer(null);
-                }}
-                className={clsx("w-full rounded-2xl border px-3 py-3 text-left transition", selectedCommitHash === commit.hash ? "border-cyan-400/40 bg-cyan-400/10" : "border-white/10 bg-black/20")}
-              >
-                <p className="text-sm text-white">{commit.message}</p>
-                <p className="mt-1 font-mono text-xs text-slate-400">{commit.hash.slice(0, 7)}</p>
-                <p className="mt-2 text-xs text-slate-500">
-                  {commit.author} • {commit.date}
-                </p>
-              </button>
-            ))}
-          </div>
-
-          <div className="space-y-4">
-            {selectedCommit && (
-              <section className="rounded-2xl border border-white/10 bg-black/20 p-4">
-                <div className="mb-3">
-                  <p className="text-sm font-medium text-white">Changed Files</p>
-                  <p className="mt-1 text-xs text-slate-400">{selectedCommit.hash.slice(0, 7)}</p>
-                </div>
-                {commitFiles.length > 0 ? (
-                  <div className="grid gap-2 2xl:grid-cols-2">
-                    {commitFiles.map((file) => (
-                      <div
-                        key={file.path}
-                        className={clsx(
-                          "rounded-xl border px-3 py-3",
-                          selectedCommitFilePath === file.path ? "border-cyan-400/40 bg-cyan-400/10" : "border-white/10 bg-white/5"
-                        )}
-                      >
-                        <div className="flex items-start justify-between gap-3">
-                          <div className="min-w-0">
-                            <p className="truncate text-sm text-white">{file.path}</p>
-                            <p className="mt-1 text-xs text-slate-400">
-                              <span className="text-lime-300">+{file.additions}</span> / <span className="text-rose-300">-{file.deletions}</span>
-                            </p>
-                          </div>
-                          <div className="flex shrink-0 gap-2">
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setSelectedCommitFilePath(file.path);
-                                openCommitDiff(file);
-                              }}
-                              className="rounded-full border border-white/10 px-2.5 py-1 text-[11px] text-slate-300"
-                            >
-                              Diff
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setSelectedCommitFilePath(file.path);
-                                void loadFileContent(file.path, selectedCommit.hash);
-                              }}
-                              className="rounded-full border border-white/10 px-2.5 py-1 text-[11px] text-slate-300"
-                            >
-                              Content
-                            </button>
-                          </div>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                ) : (
-                  <EmptyPanel title="No files" body="This commit has no changed files available to preview." />
-                )}
-              </section>
-            )}
-            {viewer && <ViewerPanel viewer={viewer} diffMode={diffMode} />}
-          </div>
-        </div>
-      ) : branches.length > 0 ? (
-        <div className="grid gap-3 xl:grid-cols-2 2xl:grid-cols-3">
-          {branches.map((branch) => (
-            <div key={branch.name} className="flex items-center justify-between gap-3 rounded-2xl border border-white/10 bg-black/20 px-4 py-4">
-              <div className="min-w-0">
-                <p className="truncate text-sm text-white">{branch.name}</p>
-                <p className="mt-1 font-mono text-xs text-slate-500">{branch.commit.slice(0, 7)}</p>
-              </div>
-              {branch.current && <span className="shrink-0 rounded-full border border-cyan-400/40 bg-cyan-400/10 px-2 py-1 text-[11px] text-cyan-200">current</span>}
-            </div>
-          ))}
-        </div>
-      ) : (
-        <EmptyPanel title="No branches loaded" body="Branch metadata will appear here for the selected repository." />
-      )}
-    </main>
   );
 }

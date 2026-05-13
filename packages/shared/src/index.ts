@@ -40,8 +40,18 @@ export type FileDiff = {
 export type FileContent = {
   path: string;
   ref: string | null;
+  kind: "text" | "image" | "binary";
+  mimeType: string | null;
+  encoding: "utf8" | "base64";
   content: string;
   tooLarge?: boolean;
+};
+
+export type RepoFileEntry = {
+  path: string;
+  name: string;
+  extension: string;
+  isImage: boolean;
 };
 
 export type CommitRecord = {
@@ -87,4 +97,5 @@ export type RepoSnapshot = {
   diffs: FileDiff[];
   commits: CommitRecord[];
   branches: BranchRecord[];
+  files: RepoFileEntry[];
 };
