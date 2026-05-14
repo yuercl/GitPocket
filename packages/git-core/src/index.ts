@@ -19,6 +19,7 @@ const LARGE_FILE_PATCH_LIMIT = 2 * 1024 * 1024;
 const LARGE_FILE_CONTENT_LIMIT = 512 * 1024;
 const execFile = promisify(execFileCallback);
 const IMAGE_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".svg", ".ico", ".avif"]);
+const EMPTY_FILE_PATH = "/dev/null";
 
 export type RepoAccessPolicy = {
   allowedRoots: string[];
@@ -37,6 +38,87 @@ function createGit(repoPath: string) {
     binary: "git",
     maxConcurrentProcesses: 4
   });
+}
+
+async function hasCommits(git: ReturnType<typeof createGit>) {
+  try {
+    await git.revparse(["--verify", "HEAD"]);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function getCurrentBranchName(git: ReturnType<typeof createGit>) {
+  try {
+    const status = await git.status();
+    return status.current ?? "detached";
+  } catch {
+    return "detached";
+  }
+}
+
+async function runGitText(repoPath: string, args: string[]) {
+  try {
+    const { stdout } = await execFile("git", args, {
+      cwd: repoPath,
+      encoding: "utf8",
+      maxBuffer: LARGE_FILE_PATCH_LIMIT * 8
+    });
+    return stdout;
+  } catch (error) {
+    const execError = error as NodeJS.ErrnoException & { stdout?: string | Buffer; stderr?: string | Buffer };
+    if (String(execError.code) === "1") {
+      const stdout = execError.stdout;
+      return typeof stdout === "string" ? stdout : stdout?.toString("utf8") ?? "";
+    }
+    throw error;
+  }
+}
+
+function summarizePatch(patch: string) {
+  let additions = 0;
+  let deletions = 0;
+
+  for (const line of patch.split("\n")) {
+    if (line.startsWith("+++ ") || line.startsWith("--- ")) {
+      continue;
+    }
+    if (line.startsWith("+")) {
+      additions += 1;
+      continue;
+    }
+    if (line.startsWith("-")) {
+      deletions += 1;
+    }
+  }
+
+  return { additions, deletions };
+}
+
+async function getInitialProjectDiff(repoPath: string) {
+  const git = createGit(repoPath);
+  const files = await git.raw(["ls-files", "--cached", "--others", "--exclude-standard"]);
+  const paths = files
+    .split("\n")
+    .map((item) => item.trim())
+    .filter(Boolean)
+    .sort((left, right) => left.localeCompare(right));
+
+  return Promise.all(
+    paths.map(async (filePath) => {
+      const patch = await runGitText(repoPath, ["diff", "--no-index", "--src-prefix=a/", "--dst-prefix=b/", "--", EMPTY_FILE_PATH, filePath]);
+      const bytes = Buffer.byteLength(patch, "utf8");
+      const { additions, deletions } = summarizePatch(patch);
+      return {
+        path: filePath,
+        additions,
+        deletions,
+        patch: bytes > LARGE_FILE_PATCH_LIMIT ? "" : patch,
+        tooLarge: bytes > LARGE_FILE_PATCH_LIMIT
+      };
+    })
+  );
 }
 
 function getMimeType(filePath: string) {
@@ -287,8 +369,9 @@ export async function getProjectRecord(
 ): Promise<ProjectRecord> {
   const resolved = await validateRepo(repoPath, policy);
   const git = createGit(resolved);
-  const [status, log] = await Promise.all([git.status(), git.log({ maxCount: 1 })]);
-  const latest = log.latest;
+  const [status, commitsAvailable] = await Promise.all([git.status(), hasCommits(git)]);
+  const log = commitsAvailable ? await git.log({ maxCount: 1 }) : null;
+  const latest = log?.latest ?? null;
 
   return {
     id,
@@ -322,6 +405,9 @@ export async function getProjectStatus(repoPath: string, policy: RepoAccessPolic
 export async function getProjectDiff(repoPath: string, policy: RepoAccessPolicy): Promise<FileDiff[]> {
   const resolved = await validateRepo(repoPath, policy);
   const git = createGit(resolved);
+  if (!(await hasCommits(git))) {
+    return getInitialProjectDiff(resolved);
+  }
   const summary = await git.diffSummary(["HEAD"]);
 
   return Promise.all(
@@ -342,6 +428,9 @@ export async function getProjectDiff(repoPath: string, policy: RepoAccessPolicy)
 export async function getProjectLog(repoPath: string, policy: RepoAccessPolicy): Promise<CommitRecord[]> {
   const resolved = await validateRepo(repoPath, policy);
   const git = createGit(resolved);
+  if (!(await hasCommits(git))) {
+    return [];
+  }
   const log = await git.log({ maxCount: 20 });
   return log.all.map((commit) => ({
     hash: commit.hash,
@@ -354,6 +443,15 @@ export async function getProjectLog(repoPath: string, policy: RepoAccessPolicy):
 export async function getProjectBranches(repoPath: string, policy: RepoAccessPolicy): Promise<BranchRecord[]> {
   const resolved = await validateRepo(repoPath, policy);
   const git = createGit(resolved);
+  if (!(await hasCommits(git))) {
+    return [
+      {
+        name: await getCurrentBranchName(git),
+        current: true,
+        commit: ""
+      }
+    ];
+  }
   const branches = await git.branch(["-vv"]);
   return Object.values(branches.branches).map((branch) => ({
     name: branch.name,
