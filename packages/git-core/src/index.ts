@@ -97,8 +97,7 @@ function summarizePatch(patch: string) {
 }
 
 async function getInitialProjectDiff(repoPath: string) {
-  const git = createGit(repoPath);
-  const files = await git.raw(["ls-files", "--cached", "--others", "--exclude-standard"]);
+  const files = await runGitText(repoPath, ["-c", "core.quotepath=false", "ls-files", "--cached", "--others", "--exclude-standard"]);
   const paths = files
     .split("\n")
     .map((item) => item.trim())
@@ -462,10 +461,9 @@ export async function getProjectBranches(repoPath: string, policy: RepoAccessPol
 
 export async function getRepoFiles(repoPath: string, policy: RepoAccessPolicy, ref?: string): Promise<RepoFileEntry[]> {
   const resolved = await validateRepo(repoPath, policy);
-  const git = createGit(resolved);
   const raw = ref
-    ? await git.raw(["ls-tree", "-r", "--name-only", ref])
-    : await git.raw(["ls-files", "--cached", "--others", "--exclude-standard"]);
+    ? await runGitText(resolved, ["-c", "core.quotepath=false", "ls-tree", "-r", "--name-only", ref])
+    : await runGitText(resolved, ["-c", "core.quotepath=false", "ls-files", "--cached", "--others", "--exclude-standard"]);
 
   return raw
     .split("\n")

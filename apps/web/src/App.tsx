@@ -368,6 +368,88 @@ function EmptyPanel({ title, body }: { title: string; body: string }) {
   );
 }
 
+function QuickProjectSwitcher({
+  projects,
+  activeProjectId,
+  loadingProjects,
+  deletingProjectId,
+  onSelect,
+  onDelete,
+  onManage,
+  onRefreshList,
+  onClose
+}: {
+  projects: ProjectRecord[];
+  activeProjectId: string | null;
+  loadingProjects: boolean;
+  deletingProjectId: string | null;
+  onSelect: (projectId: string) => void;
+  onDelete: (project: ProjectRecord) => Promise<void>;
+  onManage: () => void;
+  onRefreshList: () => void;
+  onClose: () => void;
+}) {
+  return (
+    <div className="fixed inset-0 z-40 bg-black/35 backdrop-blur-sm" onClick={onClose}>
+      <div className="absolute inset-x-3 top-20 mx-auto max-w-xl" onClick={(event) => event.stopPropagation()}>
+        <section className="overflow-hidden rounded-3xl border border-white/10 bg-[#09111f]/95 shadow-panel">
+          <div className="flex items-center justify-between gap-3 border-b border-white/10 px-4 py-3">
+            <div>
+              <p className="text-xs uppercase tracking-[0.18em] text-slate-500">Projects</p>
+              <p className="mt-1 text-[11px] text-slate-400">Switch current repo fast. Manage intake separately.</p>
+            </div>
+            <div className="flex items-center gap-2">
+              <button type="button" onClick={onRefreshList} disabled={loadingProjects} className="rounded-xl border border-white/10 bg-black/20 px-3 py-2 text-[11px] text-slate-200 transition disabled:cursor-not-allowed disabled:opacity-50">
+                {loadingProjects ? "Refreshing..." : "Refresh"}
+              </button>
+              <button type="button" onClick={onManage} className="rounded-xl border border-cyan-400/20 bg-cyan-400/10 px-3 py-2 text-[11px] text-cyan-100">
+                Manage
+              </button>
+            </div>
+          </div>
+          <div className="max-h-[60vh] overflow-y-auto p-2">
+            {projects.length === 0 ? (
+              <EmptyPanel title="No projects yet" body="Open Manage to add a repository." />
+            ) : (
+              <div className="space-y-1.5">
+                {projects.map((project) => (
+                  <div
+                    key={project.id}
+                    className={clsx(
+                      "flex items-center gap-2 rounded-2xl border px-3 py-2",
+                      activeProjectId === project.id ? "border-cyan-400/40 bg-cyan-400/10" : "border-white/10 bg-black/20"
+                    )}
+                  >
+                    <button type="button" onClick={() => onSelect(project.id)} className="min-w-0 flex-1 text-left">
+                      <div className="flex items-center justify-between gap-3">
+                        <p className="truncate text-sm text-white">{project.name}</p>
+                        <span className="shrink-0 text-[11px] text-slate-400">{project.changedFiles} changed</span>
+                      </div>
+                      <div className="mt-1 flex items-center gap-2 text-[11px] text-slate-400">
+                        <span className="truncate font-mono">{project.branch}</span>
+                        <span className="text-slate-600">/</span>
+                        <span className="truncate">{project.path}</span>
+                      </div>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void onDelete(project)}
+                      disabled={deletingProjectId === project.id}
+                      className="shrink-0 rounded-lg border border-rose-400/20 bg-rose-400/10 px-2.5 py-1.5 text-[11px] text-rose-100 transition disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      {deletingProjectId === project.id ? "..." : "Del"}
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </section>
+      </div>
+    </div>
+  );
+}
+
 function DiffInline({ rows }: { rows: DiffRow[] }) {
   return (
     <div className="overflow-x-auto bg-[#050816]">
@@ -658,7 +740,7 @@ function RepoFileList({
               )}
             >
               <FolderIcon open={!collapsed} />
-              <span className="truncate">{node.name}</span>
+              <span className="min-w-0 truncate leading-5">{node.name}</span>
             </button>
           </div>
           {!collapsed && <div className="space-y-1">{node.children.map((child) => renderTreeNode(child, depth + 1))}</div>}
@@ -688,7 +770,7 @@ function RepoFileList({
         <span className="flex w-5 shrink-0 items-center justify-center">
           <FileIcon image={file.isImage} />
         </span>
-        <span className={clsx("min-w-0 flex-1 truncate text-[12px]", file.path === selectedPath ? "text-white" : "text-slate-300")}>{file.name}</span>
+        <span className={clsx("min-w-0 flex-1 truncate text-[12px] leading-5", file.path === selectedPath ? "text-white" : "text-slate-300")}>{file.name}</span>
         <span className={clsx("shrink-0 rounded-full px-1.5 py-0.5 text-[9px] uppercase tracking-[0.12em]", file.isImage ? "bg-cyan-400/10 text-cyan-200" : "bg-white/5 text-slate-400")}>
           {file.isImage ? "img" : file.extension.replace(".", "") || "file"}
         </span>
@@ -1156,21 +1238,22 @@ function DesktopWorkspace({
   }
 
   return (
-    <main className="rounded-[28px] border border-white/10 bg-white/5 p-4 shadow-panel backdrop-blur">
-      <div className="mb-4 flex items-center justify-between gap-4">
+    <main className="rounded-[24px] border border-white/10 bg-white/5 p-3 shadow-panel backdrop-blur">
+      <div className="mb-3 flex items-center justify-between gap-3">
         <div className="overflow-x-auto rounded-2xl bg-black/20 p-1">
           <div className="grid min-w-max grid-cols-4 gap-2">
             {tabItems.map((item) => (
-              <button key={item} type="button" onClick={() => setTab(item)} className={clsx("rounded-xl px-4 py-3 text-sm font-medium capitalize transition", tab === item ? "bg-white text-slate-900" : "text-slate-400")}>
+              <button key={item} type="button" onClick={() => setTab(item)} className={clsx("rounded-xl px-3.5 py-2.5 text-[15px] font-medium capitalize transition", tab === item ? "bg-white text-slate-900" : "text-slate-400")}>
                 {item}
               </button>
             ))}
           </div>
         </div>
-        <div className="rounded-2xl border border-white/10 bg-black/20 px-4 py-3 text-right">
-          <p className="text-[11px] uppercase tracking-[0.18em] text-slate-500">Active Repo</p>
-          <p className="mt-1 text-sm text-white">{activeProject.name}</p>
-          <p className="mt-1 font-mono text-[11px] text-slate-400">{activeProject.branch}</p>
+        <div className="flex h-11 items-center rounded-2xl border border-white/10 bg-black/20 px-3 text-right">
+          <span className="text-[10px] uppercase tracking-[0.16em] text-slate-500">Active Repo</span>
+          <span className="ml-2 max-w-[11rem] truncate text-[13px] font-medium text-white">{activeProject.name}</span>
+          <span className="mx-2 text-slate-600">/</span>
+          <span className="max-w-[6rem] truncate font-mono text-[10px] text-slate-400">{activeProject.branch}</span>
         </div>
       </div>
 
@@ -1352,12 +1435,16 @@ export function App() {
   const [compactPortrait, setCompactPortrait] = useState(false);
   const [mobileDiffOpen, setMobileDiffOpen] = useState(false);
   const [workspaceMenuOpen, setWorkspaceMenuOpen] = useState(false);
+  const [projectPickerOpen, setProjectPickerOpen] = useState(false);
   const [bootError, setBootError] = useState<string | null>(null);
   const [panelError, setPanelError] = useState<string | null>(null);
   const [loadingProjects, setLoadingProjects] = useState(true);
   const [loadingDetails, setLoadingDetails] = useState(false);
   const [loadingListing, setLoadingListing] = useState(false);
+  const [refreshingProject, setRefreshingProject] = useState(false);
+  const [deletingProjectId, setDeletingProjectId] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [projectRefreshToken, setProjectRefreshToken] = useState(0);
 
   const activeProject = projects.find((project) => project.id === activeProjectId) ?? null;
   const selectedDiff = diffs.find((diff) => diff.path === selectedDiffPath) ?? diffs[0] ?? null;
@@ -1386,34 +1473,6 @@ export function App() {
   useEffect(() => {
     let cancelled = false;
 
-    async function loadProjects() {
-      setLoadingProjects(true);
-      try {
-        const projectData = await safeFetch<ProjectResponse>("/api/projects");
-        if (!cancelled) {
-          setProjects(projectData.items);
-          setActiveProjectId((current) => {
-            const stored = window.localStorage.getItem(ACTIVE_PROJECT_STORAGE_KEY);
-            if (current && projectData.items.some((item) => item.id === current)) {
-              return current;
-            }
-            if (stored && projectData.items.some((item) => item.id === stored)) {
-              return stored;
-            }
-            return projectData.items[0]?.id ?? null;
-          });
-        }
-      } catch (error) {
-        if (!cancelled) {
-          setBootError(error instanceof Error ? error.message : "Failed to load projects");
-        }
-      } finally {
-        if (!cancelled) {
-          setLoadingProjects(false);
-        }
-      }
-    }
-
     async function loadRootsAndListing() {
       try {
         const rootsData = await safeFetch<RootsResponse>("/api/fs/roots");
@@ -1438,7 +1497,7 @@ export function App() {
       }
     }
 
-    void loadProjects();
+    void reloadProjects();
     void loadRootsAndListing();
     return () => {
       cancelled = true;
@@ -1525,7 +1584,7 @@ export function App() {
     return () => {
       cancelled = true;
     };
-  }, [activeProjectId]);
+  }, [activeProjectId, projectRefreshToken]);
 
   useEffect(() => {
     setPanelError(null);
@@ -1636,6 +1695,89 @@ export function App() {
     await loadFileContent(path);
   }
 
+  async function reloadProjects() {
+    setLoadingProjects(true);
+    try {
+      const projectData = await safeFetch<ProjectResponse>("/api/projects");
+      setProjects(projectData.items);
+      setActiveProjectId((current) => {
+        const stored = window.localStorage.getItem(ACTIVE_PROJECT_STORAGE_KEY);
+        if (current && projectData.items.some((item) => item.id === current)) {
+          return current;
+        }
+        if (stored && projectData.items.some((item) => item.id === stored)) {
+          return stored;
+        }
+        return projectData.items[0]?.id ?? null;
+      });
+      setBootError(null);
+    } catch (error) {
+      setBootError(error instanceof Error ? error.message : "Failed to load projects");
+    } finally {
+      setLoadingProjects(false);
+    }
+  }
+
+  async function refreshActiveProject() {
+    if (!activeProjectId) {
+      return;
+    }
+
+    setRefreshingProject(true);
+    setPanelError(null);
+    try {
+      await reloadProjects();
+      setProjectRefreshToken((current) => current + 1);
+    } catch {
+      // Errors are surfaced by reloadProjects and the detail loader effect.
+    } finally {
+      setRefreshingProject(false);
+    }
+  }
+
+  function selectProject(projectId: string) {
+    setActiveProjectId(projectId);
+    window.localStorage.setItem(ACTIVE_PROJECT_STORAGE_KEY, projectId);
+    setProjectPickerOpen(false);
+    setWorkspaceMenuOpen(false);
+  }
+
+  async function deleteProject(project: ProjectRecord) {
+    if (!window.confirm(`Delete project "${project.name}" from GitPocket?`)) {
+      return;
+    }
+
+    setDeletingProjectId(project.id);
+    try {
+      const response = await fetch(`${API_BASE}/api/projects/${project.id}`, {
+        method: "DELETE"
+      });
+      if (!response.ok) {
+        throw new Error(`Failed to delete project: ${response.status}`);
+      }
+
+      const remainingProjects = projects.filter((item) => item.id !== project.id);
+      setProjects(remainingProjects);
+
+      if (activeProjectId === project.id) {
+        const nextProjectId = remainingProjects[0]?.id ?? null;
+        setActiveProjectId(nextProjectId);
+        if (nextProjectId) {
+          window.localStorage.setItem(ACTIVE_PROJECT_STORAGE_KEY, nextProjectId);
+        } else {
+          window.localStorage.removeItem(ACTIVE_PROJECT_STORAGE_KEY);
+        }
+      }
+
+      setBootError(null);
+      setProjectPickerOpen(false);
+    } catch (error) {
+      setBootError(error instanceof Error ? error.message : "Failed to delete project");
+    } finally {
+      setDeletingProjectId(null);
+    }
+  }
+
   async function addProject(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setSubmitting(true);
@@ -1667,38 +1809,79 @@ export function App() {
 
   return (
     <div className="min-h-screen bg-[radial-gradient(circle_at_top_left,_rgba(125,211,252,0.16),_transparent_26%),radial-gradient(circle_at_top_right,_rgba(190,242,100,0.08),_transparent_22%),linear-gradient(180deg,_#0b1020_0%,_#050816_58%,_#03050d_100%)] text-slate-100">
-      <div className={clsx("mx-auto min-h-screen py-4 sm:py-6", compactLandscape ? "max-w-none px-2" : "max-w-[1800px] px-4 sm:px-6 lg:px-8")}>
-        <header className={clsx("mb-4 flex items-end justify-between gap-4", mobile && "sticky top-0 z-20 rounded-3xl border border-white/10 bg-black/35 px-3 py-3 backdrop-blur")}>
+      <div className={clsx("mx-auto min-h-screen py-3 sm:py-4", compactLandscape ? "max-w-none px-2" : "max-w-[1800px] px-4 sm:px-5 lg:px-6")}>
+        <header className={clsx("mb-3 flex items-end justify-between gap-3", mobile && "sticky top-0 z-20 rounded-3xl border border-white/10 bg-black/35 px-3 py-3 backdrop-blur")}>
           <div className="min-w-0">
-            <div className="inline-flex rounded-full border border-white/10 bg-white/5 px-3 py-1 text-[11px] uppercase tracking-[0.24em] text-signal-cyan">
+            <div className="inline-flex rounded-full border border-white/10 bg-white/5 px-3 py-1 text-[10px] uppercase tracking-[0.22em] text-signal-cyan">
               Remote Git Workspace
             </div>
-            <h1 className={clsx("mt-3 font-display font-semibold tracking-tight text-white", mobile ? "text-2xl" : "text-3xl xl:text-4xl")}>GitPocket</h1>
-            {!mobile && <p className="mt-2 max-w-xl text-sm leading-6 text-slate-300">Observe remote repos, inspect diffs, files, and commit history from phone or desktop.</p>}
+            <h1 className={clsx("mt-2 font-display font-semibold tracking-tight text-white", mobile ? "text-2xl" : "text-[2.1rem] xl:text-[2.4rem]")}>GitPocket</h1>
+            {!mobile && <p className="mt-1.5 max-w-xl text-[13px] leading-5 text-slate-300">Observe remote repos, inspect diffs, files, and commit history from phone or desktop.</p>}
           </div>
-          <button type="button" onClick={() => setWorkspaceMenuOpen(true)} className={clsx("border border-cyan-400/20 bg-cyan-400/10 text-left", mobile ? "rounded-2xl px-4 py-3" : "rounded-xl px-3 py-2")}>
-            <p className="text-[11px] uppercase tracking-[0.2em] text-cyan-200">Workspace</p>
-            <p className={clsx("font-medium text-white", mobile ? "mt-2 text-sm" : "mt-1 text-xs")}>{activeProject?.name ?? "Projects"}</p>
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => {
+                setProjectPickerOpen((current) => !current);
+                setWorkspaceMenuOpen(false);
+              }}
+              className={clsx("flex h-11 items-center border border-cyan-400/20 bg-cyan-400/10 text-left", mobile ? "rounded-2xl px-3" : "rounded-xl px-3")}
+            >
+              <span className="text-[11px] uppercase tracking-[0.18em] text-cyan-200">Project</span>
+              <span className={clsx("ml-2 max-w-[10rem] truncate text-white", mobile ? "text-sm font-medium" : "text-[13px] font-medium")}>{activeProject?.name ?? "Choose repo"}</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => void refreshActiveProject()}
+              disabled={refreshingProject || loadingDetails || !activeProjectId}
+              className={clsx(
+                "flex h-11 items-center rounded-xl border border-white/10 bg-black/20 px-3 text-slate-200 transition disabled:cursor-not-allowed disabled:opacity-50",
+                mobile ? "text-xs" : "text-[13px]"
+              )}
+            >
+              {refreshingProject || loadingDetails ? "Refreshing..." : "Refresh"}
+            </button>
+            <button type="button" onClick={() => setWorkspaceMenuOpen(true)} className={clsx("flex h-11 items-center border border-white/10 bg-black/20 text-left", mobile ? "rounded-2xl px-3" : "rounded-xl px-3")}>
+              <span className="text-[11px] uppercase tracking-[0.18em] text-slate-400">Manage</span>
+              <span className={clsx("ml-2 text-white", mobile ? "text-sm font-medium" : "text-[13px] font-medium")}>Add repos</span>
+            </button>
+          </div>
         </header>
 
+        {projectPickerOpen && (
+          <QuickProjectSwitcher
+            projects={projects}
+            activeProjectId={activeProjectId}
+            loadingProjects={loadingProjects}
+            deletingProjectId={deletingProjectId}
+            onSelect={selectProject}
+            onDelete={deleteProject}
+            onManage={() => {
+              setProjectPickerOpen(false);
+              setWorkspaceMenuOpen(true);
+            }}
+            onRefreshList={() => void reloadProjects()}
+            onClose={() => setProjectPickerOpen(false)}
+          />
+        )}
+
         {!mobile && (
-          <div className="mb-4 grid grid-cols-4 gap-3">
-            <div className="rounded-xl border border-white/10 bg-white/5 px-4 py-3">
-              <p className="text-[11px] uppercase tracking-[0.2em] text-slate-500">Repos</p>
-              <p className="mt-2 text-xl font-semibold text-white">{projects.length}</p>
+          <div className="mb-3 grid grid-cols-4 gap-2.5">
+            <div className="rounded-xl border border-white/10 bg-white/5 px-4 py-2.5">
+              <p className="text-[10px] uppercase tracking-[0.18em] text-slate-500">Repos</p>
+              <p className="mt-1.5 text-[1.8rem] font-semibold leading-none text-white">{projects.length}</p>
             </div>
-            <div className="rounded-xl border border-white/10 bg-white/5 px-4 py-3">
-              <p className="text-[11px] uppercase tracking-[0.2em] text-slate-500">Repo Files</p>
-              <p className="mt-2 text-xl font-semibold text-white">{repoFiles.length}</p>
+            <div className="rounded-xl border border-white/10 bg-white/5 px-4 py-2.5">
+              <p className="text-[10px] uppercase tracking-[0.18em] text-slate-500">Repo Files</p>
+              <p className="mt-1.5 text-[1.8rem] font-semibold leading-none text-white">{repoFiles.length}</p>
             </div>
-            <div className="rounded-xl border border-white/10 bg-white/5 px-4 py-3">
-              <p className="text-[11px] uppercase tracking-[0.2em] text-slate-500">Working Changes</p>
-              <p className="mt-2 text-xl font-semibold text-amber-300">{countWorkingChanges(status)}</p>
+            <div className="rounded-xl border border-white/10 bg-white/5 px-4 py-2.5">
+              <p className="text-[10px] uppercase tracking-[0.18em] text-slate-500">Working Changes</p>
+              <p className="mt-1.5 text-[1.8rem] font-semibold leading-none text-amber-300">{countWorkingChanges(status)}</p>
             </div>
-            <div className="rounded-xl border border-white/10 bg-white/5 px-4 py-3">
-              <p className="text-[11px] uppercase tracking-[0.2em] text-slate-500">Recent Commits</p>
-              <p className="mt-2 text-xl font-semibold text-cyan-200">{commits.length}</p>
+            <div className="rounded-xl border border-white/10 bg-white/5 px-4 py-2.5">
+              <p className="text-[10px] uppercase tracking-[0.18em] text-slate-500">Recent Commits</p>
+              <p className="mt-1.5 text-[1.8rem] font-semibold leading-none text-cyan-200">{commits.length}</p>
             </div>
           </div>
         )}
@@ -1820,46 +2003,6 @@ export function App() {
                 </div>
               </section>
 
-              <section className="mt-4 rounded-3xl border border-white/10 bg-white/5 p-4 shadow-panel backdrop-blur">
-                <div className="mb-4 flex items-center justify-between">
-                  <div>
-                    <p className="text-xs uppercase tracking-[0.2em] text-slate-400">Projects</p>
-                    <p className="mt-1 text-sm text-slate-300">Saved on the server, current selection remembered locally.</p>
-                  </div>
-                  <div className="rounded-full border border-white/10 bg-black/20 px-2.5 py-1 text-[11px] text-slate-300">{projects.length} repos</div>
-                </div>
-
-                {loadingProjects ? (
-                  <EmptyPanel title="Loading projects" body="Reading saved repositories from the server." />
-                ) : projects.length === 0 ? (
-                  <EmptyPanel title="No projects yet" body="Select a Git repository from the directory list, then save it." />
-                ) : (
-                  <div className="space-y-3">
-                    {projects.map((project) => (
-                      <button
-                        key={project.id}
-                        type="button"
-                        onClick={() => {
-                          setActiveProjectId(project.id);
-                          window.localStorage.setItem(ACTIVE_PROJECT_STORAGE_KEY, project.id);
-                          setWorkspaceMenuOpen(false);
-                        }}
-                        className={clsx("w-full rounded-2xl border p-3 text-left transition", activeProjectId === project.id ? "border-signal-cyan/60 bg-signal-cyan/10" : "border-white/10 bg-black/20")}
-                      >
-                        <div className="flex items-start justify-between gap-3">
-                          <div className="min-w-0">
-                            <p className="truncate text-base font-medium text-white">{project.name}</p>
-                            <p className="mt-1 truncate font-mono text-xs text-slate-400">{project.branch}</p>
-                          </div>
-                          <div className="shrink-0 rounded-full bg-white/5 px-2 py-1 text-xs text-slate-300">{project.changedFiles} changed</div>
-                        </div>
-                        <p className="mt-3 truncate font-mono text-[11px] text-slate-500">{project.path}</p>
-                        <p className="mt-2 truncate text-xs text-slate-300">{project.lastCommit?.message ?? "No commits yet"}</p>
-                      </button>
-                    ))}
-                  </div>
-                )}
-              </section>
             </aside>
           </div>
         )}

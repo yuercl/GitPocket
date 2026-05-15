@@ -86,4 +86,13 @@ export class ProjectStore {
   getProject(id: string) {
     return this.projects.get(id) ?? null;
   }
+
+  async removeProject(id: string) {
+    const existed = this.projects.delete(id);
+    if (!existed) {
+      return false;
+    }
+    await this.persist();
+    return true;
+  }
 }

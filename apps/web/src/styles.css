@@ -4,7 +4,15 @@
 
 :root {
   color-scheme: dark;
-  font-family: ui-sans-serif, system-ui, sans-serif;
+  font-family:
+    "PingFang SC",
+    "Hiragino Sans GB",
+    "Noto Sans CJK SC",
+    "Microsoft YaHei",
+    "Source Han Sans SC",
+    ui-sans-serif,
+    system-ui,
+    sans-serif;
   background: #050816;
 }
 

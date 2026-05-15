@@ -101,6 +101,14 @@ app.post("/api/projects", async (request, reply) => {
   }
 });
 
+app.delete("/api/projects/:id", async (request, reply) => {
+  const removed = await projectStore.removeProject((request.params as { id: string }).id);
+  if (!removed) {
+    return reply.code(404).send({ error: "Project not found" });
+  }
+  return reply.code(204).send();
+});
+
 app.get("/api/projects/:id/status", async (request, reply) => {
   const project = projectStore.getProject((request.params as { id: string }).id);
   if (!project) {
